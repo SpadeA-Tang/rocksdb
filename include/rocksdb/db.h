@@ -322,6 +322,11 @@ class DB {
     return Status::NotSupported("`MergeDisjointInstances` not implemented");
   }
 
+  virtual Status FreezeAndClone(const Options& options, const std::vector<std::string>& checkpoint_dir,
+                                std::vector<DB*>* dbs) {
+    return Status::NotSupported("`FreezeAndClone` not implemented");
+  }
+
   virtual Status Resume() { return Status::NotSupported(); }
 
   // Close the DB by releasing resources, closing files etc. This should be

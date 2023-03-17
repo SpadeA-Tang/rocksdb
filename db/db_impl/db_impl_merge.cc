@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #include "db/db_impl/db_impl.h"
+#include "rocksdb/utilities/checkpoint.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -360,6 +361,50 @@ Status DBImpl::MergeDisjointInstances(const MergeInstanceOptions& merge_options,
   }
 
   assert(s.ok());
+  return s;
+}
+
+Status DBImpl::FreezeAndClone(const Options& options,
+                              const std::vector<std::string>& checkpoint_dirs,
+                              std::vector<DB*>* dbs) {
+  Status s;
+  // block the write
+  std::unique_ptr<WriteBlocker> write_block(new WriteBlocker(this));
+
+  autovector<MemTable*> immems;
+  for (auto cfd : *versions_->GetColumnFamilySet()) {
+    assert(cfd != nullptr);
+    if (!cfd->IsDropped()) {
+      if (!cfd->mem()->IsEmpty()) {
+        WriteContext write_context;
+        assert(log_empty_);
+        s = SwitchMemtable(cfd, &write_context);
+        if (!s.ok()) {
+          return s;
+        }
+
+        assert(cfd->mem()->IsEmpty());
+        cfd->imm()->ExportMemtables(&immems);
+      }
+    }
+  }
+
+  Checkpoint* checkpoint;
+  s = Checkpoint::Create(this, &checkpoint);
+  if (!s.ok()) {
+    return s;
+  }
+
+  for (auto dir : checkpoint_dirs) {
+    checkpoint->CreateCheckpoint(dir, UINT64_MAX);
+    DBImpl* db;
+    s = DB::Open(options, dir, &db);
+    if (!s.ok()) {
+      return s;
+    }
+    
+  }
+
   return s;
 }
 }  // namespace ROCKSDB_NAMESPACE
