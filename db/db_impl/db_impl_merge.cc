@@ -397,13 +397,12 @@ Status DBImpl::FreezeAndClone(const Options& options,
 
   for (auto dir : checkpoint_dirs) {
     checkpoint->CreateCheckpoint(dir, UINT64_MAX);
-    DBImpl* db;
+    DB* db;
     s = DB::Open(options, dir, &db);
     if (!s.ok()) {
       return s;
     }
-    
-  }
+    }
 
   return s;
 }
