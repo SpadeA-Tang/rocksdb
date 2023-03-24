@@ -373,9 +373,10 @@ Status DBImpl::FreezeAndClone(const Options& options,
   // block the write
   std::unique_ptr<WriteBlocker> write_block(new WriteBlocker(this));
 
-  autovector<MemTable*> immems;
+  std::unordered_map<std::string, autovector<MemTable*>> imms;
   for (auto cfd : *versions_->GetColumnFamilySet()) {
     assert(cfd != nullptr);
+    imms.insert({cfd->GetName(), autovector<MemTable*>{}});
     if (!cfd->IsDropped()) {
       if (!cfd->mem()->IsEmpty()) {
         WriteContext write_context;
@@ -386,10 +387,14 @@ Status DBImpl::FreezeAndClone(const Options& options,
         }
 
         assert(cfd->mem()->IsEmpty());
-        cfd->imm()->ExportMemtables(&immems);
+        auto& imm_list = (*imms.find(cfd->GetName())).second;
+        cfd->imm()->ExportMemtables(&imm_list);
+        std::cout << std::endl;
       }
     }
   }
+
+
 
   Checkpoint* checkpoint;
   s = Checkpoint::Create(this, &checkpoint);
@@ -402,7 +407,29 @@ Status DBImpl::FreezeAndClone(const Options& options,
     checkpoint->CreateCheckpoint(dir, UINT64_MAX);
     DB* db;
     s = DB::Open(options, dir, &db);
-    Iterator *iter = db->NewIterator(ReadOptions());
+    auto iter = db->NewIterator(ReadOptions());
+    iter->SeekToFirst();
+    for (auto key = iter->key(); iter->Valid(); iter->Next()) {
+      std::cout << key.ToString(false) << std::endl;
+    }
+
+    DBImpl* db_impl = static_cast<DBImpl*>(db);
+    VersionSet* vset = db_impl->GetVersionSet();
+    for (auto cfd: *vset->GetColumnFamilySet()) {
+      auto imm_list = (*imms.find(cfd->GetName())).second;
+      for (auto t: imm_list) {
+        cfd->imm()->Add(t, nullptr);
+      }
+
+      db_impl->mutex_.Lock();
+      SuperVersionContext sv_context(/* create_superversion */ true);
+      db_impl->InstallSuperVersionAndScheduleWork(cfd, &sv_context,
+                                         *cfd->GetLatestMutableCFOptions());
+      sv_context.Clean();
+      db_impl->mutex_.Unlock();
+    }
+
+    iter = db->NewIterator(ReadOptions());
     iter->SeekToFirst();
     for (auto key = iter->key(); iter->Valid(); iter->Next()) {
       std::cout << key.ToString(false) << std::endl;
