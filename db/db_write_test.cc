@@ -52,12 +52,15 @@ TEST_P(DBWriteTest, WriteTemp) {
   options.write_buffer_size = 65536;
   Reopen(options);
   WriteOptions write_options;
+  write_options.disableWAL = true;
   WriteBatch batch;
   Random rnd(301);
   dbfull()->Put(write_options, "key1", "val1");
   dbfull()->Put(write_options, "key2", "val2");
+  dbfull()->Flush(FlushOptions());
   dbfull()->Put(write_options, "key3", "val3");
-  
+  dbfull()->Put(write_options, "key4", "val4");
+
   ASSERT_EQ("val1", Get("key1"));
   ASSERT_EQ("val2", Get("key2"));
   ASSERT_EQ("val3", Get("key3"));

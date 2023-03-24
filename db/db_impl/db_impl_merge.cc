@@ -7,6 +7,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <iostream>
+
 #include "db/db_impl/db_impl.h"
 #include "rocksdb/utilities/checkpoint.h"
 
@@ -377,7 +379,7 @@ Status DBImpl::FreezeAndClone(const Options& options,
     if (!cfd->IsDropped()) {
       if (!cfd->mem()->IsEmpty()) {
         WriteContext write_context;
-        assert(log_empty_);
+//        assert(log_empty_);
         s = SwitchMemtable(cfd, &write_context);
         if (!s.ok()) {
           return s;
@@ -395,14 +397,22 @@ Status DBImpl::FreezeAndClone(const Options& options,
     return s;
   }
 
+  mutex_.Unlock();
   for (auto dir : checkpoint_dirs) {
     checkpoint->CreateCheckpoint(dir, UINT64_MAX);
     DB* db;
     s = DB::Open(options, dir, &db);
+    Iterator *iter = db->NewIterator(ReadOptions());
+    iter->SeekToFirst();
+    for (auto key = iter->key(); iter->Valid(); iter->Next()) {
+      std::cout << key.ToString(false) << std::endl;
+    }
+
     if (!s.ok()) {
       return s;
     }
-    }
+  }
+  mutex_.Lock();
 
   return s;
 }
