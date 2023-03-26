@@ -371,20 +371,28 @@ Status DBImpl::FreezeAndClone(const Options& options,
                               std::vector<DB*>* dbs) {
   Status s;
   // block the write
-  std::unique_ptr<WriteBlocker> write_block(new WriteBlocker(this));
+//  std::unique_ptr<WriteBlocker> write_block(new WriteBlocker(this));
 
   std::unordered_map<std::string, autovector<MemTable*>> imms;
+  std::unordered_map<std::string, bool> first_calls;
+  FlushOptions flush_options;
+  flush_options.wait = false;
   for (auto cfd : *versions_->GetColumnFamilySet()) {
     assert(cfd != nullptr);
     imms.insert({cfd->GetName(), autovector<MemTable*>{}});
+    first_calls.insert({cfd->GetName(), true});
     if (!cfd->IsDropped()) {
       if (!cfd->mem()->IsEmpty()) {
         WriteContext write_context;
 //        assert(log_empty_);
-        s = SwitchMemtable(cfd, &write_context);
+
+        cfd->mem()->Ref();
+        mutex_.Unlock();
+        s = FlushMemTable(cfd, flush_options, FlushReason::kManualFlush);
         if (!s.ok()) {
           return s;
         }
+        mutex_.Lock();
 
         assert(cfd->mem()->IsEmpty());
         auto& imm_list = (*imms.find(cfd->GetName())).second;
@@ -393,8 +401,6 @@ Status DBImpl::FreezeAndClone(const Options& options,
       }
     }
   }
-
-
 
   Checkpoint* checkpoint;
   s = Checkpoint::Create(this, &checkpoint);
@@ -407,39 +413,50 @@ Status DBImpl::FreezeAndClone(const Options& options,
     checkpoint->CreateCheckpoint(dir, UINT64_MAX);
     DB* db;
     s = DB::Open(options, dir, &db);
-    auto iter = db->NewIterator(ReadOptions());
-    iter->SeekToFirst();
-    for (auto key = iter->key(); iter->Valid(); iter->Next()) {
-      std::cout << key.ToString(false) << std::endl;
+    if (!s.ok()) {
+      return s;
     }
 
     DBImpl* db_impl = static_cast<DBImpl*>(db);
     VersionSet* vset = db_impl->GetVersionSet();
+    vset->SetLastSequence(GetVersionSet()->LastSequence());
+    vset->SetLastAllocatedSequence(GetVersionSet()->LastSequence());
+
     for (auto cfd: *vset->GetColumnFamilySet()) {
       auto imm_list = (*imms.find(cfd->GetName())).second;
+
       for (auto t: imm_list) {
-        cfd->imm()->Add(t, nullptr);
+        auto& first_call = (*first_calls.find(cfd->GetName())).second;
+
+        if (first_call) {
+          first_call = false;
+        } else {
+          t->Ref();
+        }
+
+        cfd->SetMemtable(t);
+        WriteContext write_context;
+        s = db_impl->FlushMemTable(cfd, flush_options, FlushReason::kManualFlush);
+        assert(s.ok());
       }
 
-      db_impl->mutex_.Lock();
-      SuperVersionContext sv_context(/* create_superversion */ true);
-      db_impl->InstallSuperVersionAndScheduleWork(cfd, &sv_context,
-                                         *cfd->GetLatestMutableCFOptions());
-      sv_context.Clean();
-      db_impl->mutex_.Unlock();
-    }
-
-    iter = db->NewIterator(ReadOptions());
-    iter->SeekToFirst();
-    for (auto key = iter->key(); iter->Valid(); iter->Next()) {
-      std::cout << key.ToString(false) << std::endl;
+//      db_impl->mutex_.Lock();
+//      SuperVersionContext sv_context(/* create_superversion */ true);
+//      db_impl->InstallSuperVersionAndScheduleWork(cfd, &sv_context,
+//                                         *cfd->GetLatestMutableCFOptions());
+//      sv_context.Clean();
+//      db_impl->mutex_.Unlock();
     }
 
     if (!s.ok()) {
       return s;
     }
+    dbs->push_back(db);
   }
-  mutex_.Lock();
+
+//  mutex_.Lock();
+//  WriteBlocker* blocker = write_block.release();
+//  delete blocker;
 
   return s;
 }

@@ -8,6 +8,7 @@
 #include <memory>
 #include <thread>
 #include <vector>
+#include <cstdlib>
 
 #include "db/db_test_util.h"
 #include "db/write_batch_internal.h"
@@ -50,25 +51,66 @@ TEST_P(DBWriteTest, WriteEmptyBatch) {
 TEST_P(DBWriteTest, WriteTemp) {
   Options options = GetOptions();
   options.write_buffer_size = 65536;
+  options.two_write_queues = false;
   Reopen(options);
   WriteOptions write_options;
   write_options.disableWAL = true;
   WriteBatch batch;
   Random rnd(301);
-  dbfull()->Put(write_options, "key1", "val1");
-  dbfull()->Put(write_options, "key2", "val2");
+  dbfull()->Put(write_options, "key01", "val1");
+  dbfull()->Put(write_options, "key02", "val2");
   dbfull()->Flush(FlushOptions());
-  dbfull()->Put(write_options, "key3", "val3");
-  dbfull()->Put(write_options, "key4", "val4");
+  dbfull()->Put(write_options, "key03", "val3");
+  dbfull()->Put(write_options, "key04", "val4");
 
-  ASSERT_EQ("val1", Get("key1"));
-  ASSERT_EQ("val2", Get("key2"));
-  ASSERT_EQ("val3", Get("key3"));
+  ASSERT_EQ("val1", Get("key01"));
+  ASSERT_EQ("val2", Get("key02"));
+  ASSERT_EQ("val3", Get("key03"));
+  ASSERT_EQ("val4", Get("key04"));
 
   std::vector<DB*> dbs;
   Env* env = Env::Default();
-  std::vector<std::string> snapshot_name = {test::PerThreadDBPath(env, "snapshot")};
+  std::string snap_dir1 = "snapshot" + std::to_string(random() % 10001);
+  std::string snap_dir2 = "snapshot" + std::to_string(random() % 10001);
+  std::vector<std::string> snapshot_name = {
+      test::PerThreadDBPath(env, snap_dir1),
+      test::PerThreadDBPath(env, snap_dir2)
+  };
   dbfull()->FreezeAndClone(options, snapshot_name, &dbs);
+
+  ReadOptions read_options;
+  read_options.verify_checksums = true;
+  std::string result;
+  for (auto db: dbs) {
+    db->Get(read_options, "key01", &result);
+    ASSERT_EQ("val1", result);
+    db->Get(read_options, "key02", &result);
+    ASSERT_EQ("val2", result);
+    db->Get(read_options, "key03", &result);
+    ASSERT_EQ("val3", result);
+    db->Get(read_options, "key04", &result);
+    ASSERT_EQ("val4", result);
+  }
+
+  auto db1 = dbs[0];
+  auto db2 = dbs[1];
+
+  db1->Put(write_options, "key05", "val5");
+  db1->Get(read_options, "key05", &result);
+  ASSERT_EQ("val5", result);
+  ASSERT_EQ("NOT_FOUND", Get("key05"));
+  Status s = db2->Get(read_options, "key05", &result);
+  assert(s.IsNotFound());
+
+  dbfull()->Put(write_options, "key06", "val6");
+  ASSERT_EQ("val6", Get("key06"));
+
+  db2->Close();
+  delete db2;
+  std::cout << "delete 2" << std::endl;
+  db1->Close();
+  delete db1;
+  std::cout << "delete 1" << std::endl;
 }
 
 // It is invalid to do sync write while disabling WAL.
