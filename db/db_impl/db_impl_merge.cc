@@ -221,6 +221,7 @@ Status DBImpl::MergeDisjointInstances(const MergeInstanceOptions& merge_options,
       mem->Ref();
       // [B] Bump log number for shared memtables.
       mem->SetNextLogNumber(max_log_number);
+      printf("added imm %p\n", mem);
       this_cfd->imm()->Add(mem, &to_delete);
     }
     this_cfd->mem()->SetNextLogNumber(max_log_number);
@@ -371,33 +372,32 @@ Status DBImpl::FreezeAndClone(const Options& options,
                               std::vector<DB*>* dbs) {
   Status s;
   // block the write
-//  std::unique_ptr<WriteBlocker> write_block(new WriteBlocker(this));
+  std::unique_ptr<WriteBlocker> write_block(new WriteBlocker(this));
+
+  std::cout << "origin db " << dbname_ << std::endl;
 
   std::unordered_map<std::string, autovector<MemTable*>> imms;
-  std::unordered_map<std::string, bool> first_calls;
+  autovector<std::pair<DBImpl*, rocksdb::ColumnFamilyData*>> cfds;
   FlushOptions flush_options;
   flush_options.wait = false;
   for (auto cfd : *versions_->GetColumnFamilySet()) {
     assert(cfd != nullptr);
     imms.insert({cfd->GetName(), autovector<MemTable*>{}});
-    first_calls.insert({cfd->GetName(), true});
     if (!cfd->IsDropped()) {
+      cfds.push_back({this, cfd});
       if (!cfd->mem()->IsEmpty()) {
         WriteContext write_context;
 //        assert(log_empty_);
-
-        cfd->mem()->Ref();
-        mutex_.Unlock();
-        s = FlushMemTable(cfd, flush_options, FlushReason::kManualFlush);
+        s = SwitchMemtable(cfd, &write_context);
         if (!s.ok()) {
           return s;
         }
-        mutex_.Lock();
-
         assert(cfd->mem()->IsEmpty());
         auto& imm_list = (*imms.find(cfd->GetName())).second;
         cfd->imm()->ExportMemtables(&imm_list);
-        std::cout << std::endl;
+        for (auto m : imm_list) {
+          m->FlushRecord()->insert({cfd->imm()->ListId(), false});
+        }
       }
     }
   }
@@ -423,29 +423,21 @@ Status DBImpl::FreezeAndClone(const Options& options,
     vset->SetLastAllocatedSequence(GetVersionSet()->LastSequence());
 
     for (auto cfd: *vset->GetColumnFamilySet()) {
+      cfds.push_back({db_impl, cfd});
       auto imm_list = (*imms.find(cfd->GetName())).second;
 
       for (auto t: imm_list) {
-        auto& first_call = (*first_calls.find(cfd->GetName())).second;
-
-        if (first_call) {
-          first_call = false;
-        } else {
-          t->Ref();
-        }
-
-        cfd->SetMemtable(t);
-        WriteContext write_context;
-        s = db_impl->FlushMemTable(cfd, flush_options, FlushReason::kManualFlush);
-        assert(s.ok());
+        t->Ref();
+        cfd->imm()->Add(t, nullptr);
+        t->FlushRecord()->insert({cfd->imm()->ListId(), false});
       }
 
-//      db_impl->mutex_.Lock();
-//      SuperVersionContext sv_context(/* create_superversion */ true);
-//      db_impl->InstallSuperVersionAndScheduleWork(cfd, &sv_context,
-//                                         *cfd->GetLatestMutableCFOptions());
-//      sv_context.Clean();
-//      db_impl->mutex_.Unlock();
+      db_impl->mutex_.Lock();
+      SuperVersionContext sv_context(/* create_superversion */ true);
+      db_impl->InstallSuperVersionAndScheduleWork(cfd, &sv_context,
+                                         *cfd->GetLatestMutableCFOptions());
+      sv_context.Clean();
+      db_impl->mutex_.Unlock();
     }
 
     if (!s.ok()) {
@@ -454,9 +446,19 @@ Status DBImpl::FreezeAndClone(const Options& options,
     dbs->push_back(db);
   }
 
-//  mutex_.Lock();
-//  WriteBlocker* blocker = write_block.release();
-//  delete blocker;
+  mutex_.Lock();
+  WriteBlocker* blocker = write_block.release();
+  delete blocker;
+
+  for (auto p : cfds) {
+    FlushRequest flush_req;
+    GenerateFlushRequest({p.second}, &flush_req);
+    p.first->mutex_.Lock();
+    p.first->SchedulePendingFlush(flush_req, FlushReason::kWriteBufferFull);
+    p.first->SchedulePendingCompaction(p.second);
+    p.first->MaybeScheduleFlushOrCompaction();
+    p.first->mutex_.Unlock();
+  }
 
   return s;
 }

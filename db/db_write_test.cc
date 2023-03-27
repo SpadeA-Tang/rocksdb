@@ -95,22 +95,33 @@ TEST_P(DBWriteTest, WriteTemp) {
   auto db1 = dbs[0];
   auto db2 = dbs[1];
 
+  Status s;
   db1->Put(write_options, "key05", "val5");
   db1->Get(read_options, "key05", &result);
   ASSERT_EQ("val5", result);
   ASSERT_EQ("NOT_FOUND", Get("key05"));
-  Status s = db2->Get(read_options, "key05", &result);
+  s = db2->Get(read_options, "key05", &result);
   assert(s.IsNotFound());
 
   dbfull()->Put(write_options, "key06", "val6");
   ASSERT_EQ("val6", Get("key06"));
+  s = db1->Get(read_options, "key06", &result);
+  assert(s.IsNotFound());
+  s = db2->Get(read_options, "key06", &result);
+  assert(s.IsNotFound());
 
-  db2->Close();
-  delete db2;
-  std::cout << "delete 2" << std::endl;
-  db1->Close();
-  delete db1;
-  std::cout << "delete 1" << std::endl;
+  s = db2->Put(write_options, "key05", "val52");
+  s = db2->Get(read_options, "key05", &result);
+  ASSERT_EQ("val52", result);
+  ASSERT_EQ("NOT_FOUND", Get("key05"));
+  s = db1->Get(read_options, "key05", &result);
+  ASSERT_EQ("val5", result);
+
+  FlushOptions flush_opts;
+  db2->Flush(flush_opts);
+  std::cout << "flush 2" << std::endl;
+  db1->Flush(flush_opts);
+  std::cout << "flush 1" << std::endl;
 }
 
 // It is invalid to do sync write while disabling WAL.

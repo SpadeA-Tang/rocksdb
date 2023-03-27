@@ -210,7 +210,8 @@ class MemTableList {
   // A list of memtables.
   explicit MemTableList(int min_write_buffer_number_to_merge,
                         int max_write_buffer_number_to_maintain,
-                        int64_t max_write_buffer_size_to_maintain)
+                        int64_t max_write_buffer_size_to_maintain,
+                        long int id)
       : imm_flush_needed(false),
         imm_trim_needed(false),
         min_write_buffer_number_to_merge_(min_write_buffer_number_to_merge),
@@ -222,7 +223,8 @@ class MemTableList {
         flush_requested_(false),
         current_memory_usage_(0),
         current_memory_allocted_bytes_excluding_last_(0),
-        current_has_history_(false) {
+        current_has_history_(false),
+        id_(id) {
     current_->Ref();
   }
 
@@ -386,6 +388,10 @@ class MemTableList {
     }
   }
 
+  long int ListId() const {
+    return id_;
+  }
+
   // Used only by DBImplSecondary during log replay.
   // Remove memtables whose data were written before the WAL with log_number
   // was created, i.e. mem->GetNextLogNumber() <= log_number. The memtables are
@@ -438,6 +444,8 @@ class MemTableList {
 
   // Cached value of current_->HasHistory().
   std::atomic<bool> current_has_history_;
+
+  long int id_;
 };
 
 // Installs memtable atomic flush results.

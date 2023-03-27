@@ -543,6 +543,15 @@ TEST_F(DBMergeTest, MemtableIsolation) {
   ASSERT_OK(get_db(2_db)->Put(wopts, get_cf(2_db, default_cf), "2", "v"));
   // Check merged DB is not affected by source DB writes.
   VerifyKeyValue(2_db, default_cf, "1", "v1");
+
+  auto db = get_db(1_db);
+  auto db2 = get_db(2_db);
+
+  FlushOptions flush_opts;
+  std::cout << "Flush DB" << std::endl;
+//  db->Flush(flush_opts);
+//  db2->Flush(flush_opts);
+  db->Close();
 }
 
 TEST_F(DBMergeTest, CacheReuse) {

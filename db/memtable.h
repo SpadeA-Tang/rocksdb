@@ -498,6 +498,10 @@ class MemTable {
     flush_in_progress_ = in_progress;
   }
 
+  std::unordered_map<long int, bool>* FlushRecord() {
+    return &flush_record_;
+  }
+
 #ifndef ROCKSDB_LITE
   void SetFlushJobInfo(std::unique_ptr<FlushJobInfo>&& info) {
     flush_job_info_ = std::move(info);
@@ -592,6 +596,8 @@ class MemTable {
 
   // Memtable id to track flush.
   uint64_t id_ = 0;
+
+  std::unordered_map<long int, bool> flush_record_;
 
   // Sequence number of the atomic flush that is responsible for this memtable.
   // The sequence number of atomic flush is a seq, such that no writes with
