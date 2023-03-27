@@ -11,6 +11,7 @@
 
 #include "db/db_impl/db_impl.h"
 #include "rocksdb/utilities/checkpoint.h"
+#include "db/db_impl/db_impl.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -221,7 +222,6 @@ Status DBImpl::MergeDisjointInstances(const MergeInstanceOptions& merge_options,
       mem->Ref();
       // [B] Bump log number for shared memtables.
       mem->SetNextLogNumber(max_log_number);
-      printf("added imm %p\n", mem);
       this_cfd->imm()->Add(mem, &to_delete);
     }
     this_cfd->mem()->SetNextLogNumber(max_log_number);
