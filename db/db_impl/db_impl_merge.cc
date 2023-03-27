@@ -374,8 +374,6 @@ Status DBImpl::FreezeAndClone(const Options& options,
   // block the write
   std::unique_ptr<WriteBlocker> write_block(new WriteBlocker(this));
 
-  std::cout << "origin db " << dbname_ << std::endl;
-
   std::unordered_map<std::string, autovector<MemTable*>> imms;
   autovector<std::pair<DBImpl*, rocksdb::ColumnFamilyData*>> cfds;
   FlushOptions flush_options;

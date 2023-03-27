@@ -122,6 +122,11 @@ TEST_P(DBWriteTest, WriteTemp) {
   std::cout << "flush 2" << std::endl;
   db1->Flush(flush_opts);
   std::cout << "flush 1" << std::endl;
+
+  db2->Close();
+  delete db2;
+  db1->Close();
+  delete db1;
 }
 
 // It is invalid to do sync write while disabling WAL.

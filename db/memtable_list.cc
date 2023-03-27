@@ -267,7 +267,7 @@ void MemTableListVersion::Add(MemTable* m, autovector<MemTable*>* to_delete) {
 void MemTableListVersion::Remove(MemTable* m,
                                  autovector<MemTable*>* to_delete) {
   assert(refs_ == 1);  // only when refs_ == 1 is MemTableListVersion mutable
-  printf("remove imm %p\n", m);
+//  printf("remove imm %p\n", m);
   memlist_.remove(m);
 
   m->MarkFlushed();
@@ -361,7 +361,7 @@ void MemTableList::PickMemtablesToFlush(uint64_t max_memtable_id,
       break;
     }
 
-    printf("pick memtable %p\n", m);
+//    printf("pick memtable %p\n", m);
     auto flush_record = m->FlushRecord();
     bool shared_table = flush_record->find(id_) != flush_record->end();
     if (!m->flush_in_progress_ ||

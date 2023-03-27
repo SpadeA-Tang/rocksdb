@@ -551,7 +551,7 @@ TEST_F(DBMergeTest, MemtableIsolation) {
   std::cout << "Flush DB" << std::endl;
 //  db->Flush(flush_opts);
 //  db2->Flush(flush_opts);
-  db->Close();
+//  db->Close();
 }
 
 TEST_F(DBMergeTest, CacheReuse) {
