@@ -968,7 +968,7 @@ class DBImpl : public DB {
   Status FreezeAndClone(const Options& options,
                         const std::vector<std::string>& checkpoint_dir,
                         std::vector<ColumnFamilyDescriptor>& column_families,
-                        std::vector<std::vector<ColumnFamilyHandle*>*>* handles,
+                        std::vector<std::vector<ColumnFamilyHandle*>>* handles,
                         std::vector<DB*>* dbs) override;
 
   static IOStatus CreateAndNewDirectory(

@@ -81,7 +81,7 @@ TEST_P(DBWriteTest, WriteTemp) {
   std::vector<ColumnFamilyDescriptor> column_families;
   column_families.push_back(
       ColumnFamilyDescriptor(kDefaultColumnFamilyName, cf_options));
-  std::vector<std::vector<ColumnFamilyHandle*>*> handles;
+  std::vector<std::vector<ColumnFamilyHandle*>> handles;
   dbfull()->FreezeAndClone(options, snapshot_name, column_families, &handles, &dbs);
 
   ReadOptions read_options;
@@ -130,7 +130,7 @@ TEST_P(DBWriteTest, WriteTemp) {
   std::cout << "flush 1" << std::endl;
 
   for (auto handle: handles) {
-    for (auto h: *handle) {
+    for (auto h: handle) {
       delete h;
     }
   }

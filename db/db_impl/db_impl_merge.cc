@@ -370,7 +370,7 @@ Status DBImpl::MergeDisjointInstances(const MergeInstanceOptions& merge_options,
 Status DBImpl::FreezeAndClone(
     const Options& options, const std::vector<std::string>& checkpoint_dirs,
     std::vector<ColumnFamilyDescriptor>& column_families,
-    std::vector<std::vector<ColumnFamilyHandle*>*>* handles,
+    std::vector<std::vector<ColumnFamilyHandle*>>* handles,
     std::vector<DB*>* dbs) {
   Status s;
   // block the write
@@ -412,10 +412,9 @@ Status DBImpl::FreezeAndClone(
   for (auto dir : checkpoint_dirs) {
     checkpoint->CreateCheckpoint(dir, UINT64_MAX);
     DB* db;
-    std::vector<ColumnFamilyHandle*> *handle =
-        new std::vector<ColumnFamilyHandle*>;
+    std::vector<ColumnFamilyHandle*> handle;
     ;
-    s = DB::Open(options, dir, column_families, handle, &db);
+    s = DB::Open(options, dir, column_families, &handle, &db);
     if (!s.ok()) {
       return s;
     }
