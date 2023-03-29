@@ -965,7 +965,7 @@ class DBImpl : public DB {
   Status MergeDisjointInstances(const MergeInstanceOptions& merge_options,
                                 const std::vector<DB*>& instances) override;
 
-  Status FreezeAndClone(const DBOptions& options,
+  Status FreezeAndClone(const std::vector<DBOptions>& options,
                         const std::vector<std::string>& checkpoint_dir,
                         std::vector<ColumnFamilyDescriptor>& column_families,
                         std::vector<std::vector<ColumnFamilyHandle*>>* handles,

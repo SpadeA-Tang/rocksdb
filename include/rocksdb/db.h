@@ -323,7 +323,8 @@ class DB {
   }
 
   virtual Status FreezeAndClone(
-      const DBOptions& options, const std::vector<std::string>& checkpoint_dir,
+      const std::vector<DBOptions>& options,
+      const std::vector<std::string>& checkpoint_dir,
       std::vector<ColumnFamilyDescriptor>& column_families,
       std::vector<std::vector<ColumnFamilyHandle*>>* handles,
       std::vector<DB*>* dbs) {

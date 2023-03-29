@@ -368,7 +368,8 @@ Status DBImpl::MergeDisjointInstances(const MergeInstanceOptions& merge_options,
 }
 
 Status DBImpl::FreezeAndClone(
-    const DBOptions& options, const std::vector<std::string>& checkpoint_dirs,
+    const std::vector<DBOptions>& options,
+    const std::vector<std::string>& checkpoint_dirs,
     std::vector<ColumnFamilyDescriptor>& column_families,
     std::vector<std::vector<ColumnFamilyHandle*>>* handles,
     std::vector<DB*>* dbs) {
@@ -409,12 +410,13 @@ Status DBImpl::FreezeAndClone(
   }
 
   mutex_.Unlock();
-  for (auto dir : checkpoint_dirs) {
+  for (size_t i = 0; i < checkpoint_dirs.size(); i++) {
+    const auto& dir = checkpoint_dirs[i];
     checkpoint->CreateCheckpoint(dir, UINT64_MAX);
     DB* db;
     std::vector<ColumnFamilyHandle*> handle;
     ;
-    s = DB::Open(options, dir, column_families, &handle, &db);
+    s = DB::Open(options[i], dir, column_families, &handle, &db);
     if (!s.ok()) {
       return s;
     }
