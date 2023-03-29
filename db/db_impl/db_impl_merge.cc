@@ -367,9 +367,11 @@ Status DBImpl::MergeDisjointInstances(const MergeInstanceOptions& merge_options,
   return s;
 }
 
-Status DBImpl::FreezeAndClone(const Options& options,
-                              const std::vector<std::string>& checkpoint_dirs,
-                              std::vector<DB*>* dbs) {
+Status DBImpl::FreezeAndClone(
+    const Options& options, const std::vector<std::string>& checkpoint_dirs,
+    std::vector<ColumnFamilyDescriptor>& column_families,
+    std::vector<std::vector<ColumnFamilyHandle*>*>* handles,
+    std::vector<DB*>* dbs) {
   Status s;
   // block the write
   std::unique_ptr<WriteBlocker> write_block(new WriteBlocker(this));
@@ -410,7 +412,10 @@ Status DBImpl::FreezeAndClone(const Options& options,
   for (auto dir : checkpoint_dirs) {
     checkpoint->CreateCheckpoint(dir, UINT64_MAX);
     DB* db;
-    s = DB::Open(options, dir, &db);
+    std::vector<ColumnFamilyHandle*> *handle =
+        new std::vector<ColumnFamilyHandle*>;
+    ;
+    s = DB::Open(options, dir, column_families, handle, &db);
     if (!s.ok()) {
       return s;
     }
@@ -442,6 +447,7 @@ Status DBImpl::FreezeAndClone(const Options& options,
       return s;
     }
     dbs->push_back(db);
+    handles->push_back(handle);
   }
 
   mutex_.Lock();

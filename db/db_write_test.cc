@@ -76,7 +76,13 @@ TEST_P(DBWriteTest, WriteTemp) {
       test::PerThreadDBPath(env, snap_dir1),
       test::PerThreadDBPath(env, snap_dir2)
   };
-  dbfull()->FreezeAndClone(options, snapshot_name, &dbs);
+
+  ColumnFamilyOptions cf_options(options);
+  std::vector<ColumnFamilyDescriptor> column_families;
+  column_families.push_back(
+      ColumnFamilyDescriptor(kDefaultColumnFamilyName, cf_options));
+  std::vector<std::vector<ColumnFamilyHandle*>*> handles;
+  dbfull()->FreezeAndClone(options, snapshot_name, column_families, &handles, &dbs);
 
   ReadOptions read_options;
   read_options.verify_checksums = true;
@@ -122,6 +128,12 @@ TEST_P(DBWriteTest, WriteTemp) {
   std::cout << "flush 2" << std::endl;
   db1->Flush(flush_opts);
   std::cout << "flush 1" << std::endl;
+
+  for (auto handle: handles) {
+    for (auto h: *handle) {
+      delete h;
+    }
+  }
 
   db2->Close();
   delete db2;

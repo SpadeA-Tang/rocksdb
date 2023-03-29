@@ -322,8 +322,11 @@ class DB {
     return Status::NotSupported("`MergeDisjointInstances` not implemented");
   }
 
-  virtual Status FreezeAndClone(const Options& options, const std::vector<std::string>& checkpoint_dir,
-                                std::vector<DB*>* dbs) {
+  virtual Status FreezeAndClone(
+      const Options& options, const std::vector<std::string>& checkpoint_dir,
+      std::vector<ColumnFamilyDescriptor>& column_families,
+      std::vector<std::vector<ColumnFamilyHandle*>*>* handles,
+      std::vector<DB*>* dbs) {
     return Status::NotSupported("`FreezeAndClone` not implemented");
   }
 
