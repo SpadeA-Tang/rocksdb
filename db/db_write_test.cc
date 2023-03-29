@@ -82,7 +82,7 @@ TEST_P(DBWriteTest, WriteTemp) {
   column_families.push_back(
       ColumnFamilyDescriptor(kDefaultColumnFamilyName, cf_options));
   std::vector<std::vector<ColumnFamilyHandle*>> handles;
-  dbfull()->FreezeAndClone(options, snapshot_name, column_families, &handles, &dbs);
+  dbfull()->FreezeAndClone(DBOptions(options), snapshot_name, column_families, &handles, &dbs);
 
   ReadOptions read_options;
   read_options.verify_checksums = true;

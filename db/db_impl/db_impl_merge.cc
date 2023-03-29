@@ -368,7 +368,7 @@ Status DBImpl::MergeDisjointInstances(const MergeInstanceOptions& merge_options,
 }
 
 Status DBImpl::FreezeAndClone(
-    const Options& options, const std::vector<std::string>& checkpoint_dirs,
+    const DBOptions& options, const std::vector<std::string>& checkpoint_dirs,
     std::vector<ColumnFamilyDescriptor>& column_families,
     std::vector<std::vector<ColumnFamilyHandle*>>* handles,
     std::vector<DB*>* dbs) {
