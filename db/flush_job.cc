@@ -9,9 +9,9 @@
 
 #include "db/flush_job.h"
 
-#include <cinttypes>
-
 #include <algorithm>
+#include <cinttypes>
+#include <iostream>
 #include <vector>
 
 #include "db/builder.h"
@@ -797,6 +797,7 @@ Status FlushJob::WriteLevel0Table() {
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_FLUSH_WRITE_L0);
   db_mutex_->AssertHeld();
+  std::cout << "write level0 table, db name " << dbname_ << std::endl;
   const uint64_t start_micros = clock_->NowMicros();
   const uint64_t start_cpu_micros = clock_->CPUMicros();
   Status s;

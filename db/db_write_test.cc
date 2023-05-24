@@ -86,6 +86,13 @@ TEST_P(DBWriteTest, WriteTemp) {
   dbfull()->FreezeAndClone(db_options, snapshot_name, column_families, &handles,
                            &dbs);
 
+  std::cout << "delete handle" << std::endl;
+  for (auto handle: handles) {
+    for (auto h: handle) {
+      delete h;
+    }
+  }
+
   ReadOptions read_options;
   read_options.verify_checksums = true;
   std::string result;
@@ -125,22 +132,27 @@ TEST_P(DBWriteTest, WriteTemp) {
   s = db1->Get(read_options, "key05", &result);
   ASSERT_EQ("val5", result);
 
-  FlushOptions flush_opts;
-  db2->Flush(flush_opts);
-  std::cout << "flush 2" << std::endl;
-  db1->Flush(flush_opts);
-  std::cout << "flush 1" << std::endl;
+//  FlushOptions flush_opts;
+//  db2->Flush(flush_opts);
+//  std::cout << "flush 2" << std::endl;
+//  db1->Flush(flush_opts);
+//  std::cout << "flush 1" << std::endl;
 
-  for (auto handle: handles) {
-    for (auto h: handle) {
-      delete h;
-    }
-  }
+
+  std::cout << "begin db1 closed" << std::endl;
 
   db2->Close();
   delete db2;
   db1->Close();
   delete db1;
+  std::cout << "db1 closed" << std::endl;
+
+  DB* db3;
+  DB::Open(options, snap_dir1, &db3);
+  db3->Get(read_options, "key05", &result);
+  ASSERT_EQ("val5", result);
+
+  std::cout << "done" << std::endl;
 }
 
 // It is invalid to do sync write while disabling WAL.
