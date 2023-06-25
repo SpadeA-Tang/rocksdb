@@ -749,6 +749,10 @@ Status ExternalSstFileIngestionJob::AssignLevelAndSeqnoForIngestedFile(
 
   for (int lvl = 0; lvl < cfd_->NumberLevels(); lvl++) {
     if (lvl > 0 && lvl < vstorage->base_level()) {
+      // Enter here means sst range is not overlap with l0, so we can ingest sst
+      // to the base level if it is not overlap with the files in base level or
+      // base level -1 if overlaps.
+      target_level = lvl;
       continue;
     }
 
