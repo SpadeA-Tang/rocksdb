@@ -4240,6 +4240,7 @@ Status VersionSet::ProcessManifestWrites(
       // TODO(yanqin) maybe consider unordered_map
       Version* version = nullptr;
       VersionBuilder* builder = nullptr;
+      // spadea: 如果前面已经有相同 cf 的 edit 了，沿用之前的 version 和 builder
       for (int i = 0; i != static_cast<int>(versions.size()); ++i) {
         uint32_t cf_id = last_writer->cfd->GetID();
         if (versions[i]->cfd()->GetID() == cf_id) {

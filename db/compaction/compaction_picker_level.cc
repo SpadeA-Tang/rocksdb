@@ -165,6 +165,7 @@ void LevelCompactionBuilder::PickFileToCompact(
   start_level_inputs_.files.clear();
 }
 
+// spadea: after this, input level files and out level files are picked ready
 void LevelCompactionBuilder::SetupInitialFiles() {
   // Find the compactions by size on all levels.
   bool skipped_l0_to_base = false;
@@ -220,6 +221,8 @@ void LevelCompactionBuilder::SetupInitialFiles() {
     return;
   }
 
+  // todo(spadea): what to do if start_level_inputs_.is_empty()
+
   // if we didn't find a compaction, check if there are any files marked for
   // compaction
   parent_index_ = base_index_ = -1;
@@ -268,6 +271,7 @@ bool LevelCompactionBuilder::SetupOtherL0FilesIfNeeded() {
   return true;
 }
 
+// next to read(spadea)
 bool LevelCompactionBuilder::SetupOtherInputsIfNeeded() {
   // Setup input files from output level. For output to L0, we only compact
   // spans of files that do not interact with any pending compactions, so don't

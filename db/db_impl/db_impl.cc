@@ -5361,6 +5361,10 @@ Status DBImpl::ReserveFileNumbersBeforeIngestion(
   // reuse the file number that has already assigned to the internal file,
   // and this will overwrite the external file. To protect the external
   // file, we have to make sure the file number will never being reused.
+  //
+  // spadea: hard link （ingest sst 的 hard link）后 crash，那么如果这些 file number 被
+  // 复用，这些 ingest 的 sst 将会被覆盖，所以这里通过 apply dummy log 来 handle 这个点.
+  // 应该是因为在 edit 中会记录 next_file_number 吧
   s = versions_->LogAndApply(cfd, *cf_options, &dummy_edit, &mutex_,
                              directories_.GetDbDir());
   if (s.ok()) {
