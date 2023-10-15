@@ -4,6 +4,9 @@
 #include <string>
 
 #include "rocksdb/table.h"
+#include "table/block_based/block_builder.h"
+#include "table/block_based/block_type.h"
+#include "table/table_builder.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -38,13 +41,28 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
   struct Rep;
   Rep* rep_;
 
-  void WriteBlock(BlockBuilder* block, BlockHandle* handle,
-                  BlockType blocktype,std::string* buffer));
+  struct ParallelCompressionRep;
+
+  void WriteBlock(BlockBuilder* block, BlockHandle* handle, BlockType blocktype,
+                  std::string* buffer);
   void WriteBlock(const Slice& block_contents, BlockHandle* handle,
                   BlockType block_type, std::string* buffer);
   void WriteRawBlock(const Slice& data, CompressionType, BlockHandle* handle,
                      BlockType block_type, const Slice* raw_data = nullptr,
                      bool is_top_level_filter_block = false);
+
+  template <typename TBlocklike>
+  Status InsertBlockInCache(const Slice& block_contents,
+                            const BlockHandle* handle, BlockType block_type);
+
+  Status InsertBlockInCacheHelper(const Slice& block_contents,
+                                  const BlockHandle* handle,
+                                  BlockType block_type,
+                                  bool is_top_level_filter_block);
+
+  Status InsertBlockInCompressedCache(const Slice& block_contents,
+                                      const CompressionType type,
+                                      const BlockHandle* handle);
 
   void CompressAndVerifyBlock(const Slice& raw_block_contents,
                               bool is_data_block,
@@ -57,6 +75,8 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
 
   void FlushNewDataBlock();
   void FlushOldDataBlock();
+
+  const uint64_t kCompressionSizeLimit = std::numeric_limits<int>::max();
 };
 
 
