@@ -166,6 +166,8 @@ uint8_t WriteThread::AwaitState(Writer* w, uint8_t goal_mask,
 
         auto now = std::chrono::steady_clock::now();
         if (now == iter_begin ||
+            // 如果超过了这次 yield 的时间超过了 slow_yield_usec_，则认为有其他任务也在使用该 CPU
+            // 而我们最多容忍 kMaxSlowYieldsWhileSpinning 次这种情况
             now - iter_begin >= std::chrono::microseconds(slow_yield_usec_)) {
           // conservatively count it as a slow yield if our clock isn't
           // accurate enough to measure the yield duration
