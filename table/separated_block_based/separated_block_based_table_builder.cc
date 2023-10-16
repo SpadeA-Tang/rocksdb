@@ -71,7 +71,30 @@ struct SeparatedBlockBasedTableBuilder::Rep {
                                                   ? BlockBasedTableOptions::kDataBlockBinarySearch
                                                   : table_options.data_block_index_type,
                                               table_options.data_block_hash_table_util_ratio),
-                               reason(tbo.reason)
+                                              internal_prefix_transform(tbo.moptions.prefix_extractor.get()),
+                            compression_type(tbo.compression_type),
+                            sample_for_compression(tbo.moptions.sample_for_compression),
+                            compressible_input_data_bytes(0),
+                            uncompressible_input_data_bytes(0),
+                            sampled_input_data_bytes(0),
+                            sampled_output_slow_data_bytes(0),
+                            sampled_output_fast_data_bytes(0),
+                            compression_opts(tbo.compression_opts),
+                            compression_dict(),
+                            compression_ctxs(tbo.compression_opts.parallel_threads),
+                            verify_ctxs(tbo.compression_opts.parallel_threads),
+                            verify_dict(),
+                            state((tbo.compression_opts.max_dict_bytes > 0) ? State::kBuffered
+                                                                            : State::kUnbuffered),
+                            flush_block_policy(
+                                table_options.flush_block_policy_factory->NewFlushBlockPolicy(
+                                    table_options, data_block)),
+                            flush_old_block_policy(
+                                table_options.flush_block_policy_factory->NewFlushBlockPolicy(
+                                    table_options, data_block)),
+                            reason(tbo.reason),
+                            status_ok(true),
+                            io_status_ok(true) 
   {
 
   }
@@ -196,7 +219,38 @@ struct SeparatedBlockBasedTableBuilder::Rep {
 SeparatedBlockBasedTableBuilder::SeparatedBlockBasedTableBuilder(
     const BlockBasedTableOptions& table_options,
     const TableBuilderOptions& table_builder_options,
-    WritableFileWriter* file) {}
+    WritableFileWriter* file) {
+  BlockBasedTableOptions sanitized_table_options(table_options);
+  if (sanitized_table_options.format_version == 0 &&
+      sanitized_table_options.checksum != kCRC32c) {
+    ROCKS_LOG_WARN(
+        tbo.ioptions.logger,
+        "Silently converting format_version to 1 because checksum is "
+        "non-default");
+    // silently convert format_version to 1 to keep consistent with current
+    // behavior
+    sanitized_table_options.format_version = 1;
+  }
+
+  rep_ = new Rep(sanitized_table_options, tbo, file);
+
+  if (rep_->filter_builder != nullptr) {
+    rep_->filter_builder->StartBlock(0);
+  }
+
+  // Extremely large files use atypical cache key encoding, and we don't
+  // know ahead of time how big the file will be. But assuming it's less
+  // than 4TB, we will correctly predict the cache keys.
+  BlockBasedTable::SetupBaseCacheKey(
+      &rep_->props, tbo.db_session_id, tbo.cur_file_num,
+      BlockBasedTable::kMaxFileSizeStandardEncoding, &rep_->base_cache_key);
+}
+
+SeparatedBlockBasedTableBuilder::~SeparatedBlockBasedTableBuilder() {
+  // Catch errors where caller forgot to call Finish()
+  assert(rep_->state == Rep::State::kClosed);
+  delete rep_;
+}
 
 struct SeparatedBlockBasedTableBuilder::ParallelCompressionRep {
   // Keys is a wrapper of vector of strings avoiding
