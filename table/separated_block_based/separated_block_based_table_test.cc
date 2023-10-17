@@ -33,9 +33,20 @@ class SeparatedBlockTest : public testing::Test {
     ColumnFamilyOptions cf_options;
     MutableCFOptions moptions(cf_options);
     IntTblPropCollectorFactories factories;
+    SeparatedBlockBasedTableBuilder builder(
+        BlockBasedTableOptions{},
+        TableBuilderOptions(ioptions, moptions, comparator, &factories,
+                            compression_type, CompressionOptions(),
+                            0 /* column_family_id */, kDefaultColumnFamilyName,
+                            -1 /* level */),
+        BytewiseComparator(), writer.get());
+    std::unique_ptr<TableBuilder> table_builder(builder);
   }
 
+  std::string Path(const std::string& fname) { return test_dir_ + "/" + fname; }
+
  private:
+  std::string test_dir_;
   std::shared_ptr<FileSystem> fs_;
 
   void NewFileWriter(const std::string& filename,

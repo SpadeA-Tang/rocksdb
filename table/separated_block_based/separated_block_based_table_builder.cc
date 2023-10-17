@@ -47,57 +47,60 @@ constexpr size_t kBlockTrailerSize =
     SeparatedBlockBasedTable::kBlockTrailerSize;
 }
 
-
 struct SeparatedBlockBasedTableBuilder::Rep {
-  Rep(const BlockBasedTableOptions& table_opt, const TableBuilderOptions& tbo, const UserComparatorWrapper& user_comparator_,
-      WritableFileWriter* f):ioptions(tbo.ioptions),
-                               moptions(tbo.moptions),table_options(table_opt), user_comparator(user_comparator_),internal_comparator(tbo.internal_comparator),file(f),offset(0),old_offset(0),alignment(table_options.block_align
-                                             ? std::min(static_cast<size_t>(table_options.block_size),
-                                                        kDefaultPageSize)
-                                             : 0),
-                               data_block(table_options.block_restart_interval,
-                                          table_options.use_delta_encoding,
-                                          false /* use_value_delta_encoding */,
-                                          tbo.internal_comparator.user_comparator()
-                                                  ->CanKeysWithDifferentByteContentsBeEqual()
-                                              ? BlockBasedTableOptions::kDataBlockBinarySearch
-                                              : table_options.data_block_index_type,
-                                          table_options.data_block_hash_table_util_ratio),
-                               old_data_block(table_options.block_restart_interval,
-                                              table_options.use_delta_encoding,
-                                              false /* use_value_delta_encoding */,
-                                              tbo.internal_comparator.user_comparator()
-                                                      ->CanKeysWithDifferentByteContentsBeEqual()
-                                                  ? BlockBasedTableOptions::kDataBlockBinarySearch
-                                                  : table_options.data_block_index_type,
-                                              table_options.data_block_hash_table_util_ratio),
-                                              internal_prefix_transform(tbo.moptions.prefix_extractor.get()),
-                            compression_type(tbo.compression_type),
-                            sample_for_compression(tbo.moptions.sample_for_compression),
-                            compressible_input_data_bytes(0),
-                            uncompressible_input_data_bytes(0),
-                            sampled_input_data_bytes(0),
-                            sampled_output_slow_data_bytes(0),
-                            sampled_output_fast_data_bytes(0),
-                            compression_opts(tbo.compression_opts),
-                            compression_dict(),
-                            compression_ctxs(tbo.compression_opts.parallel_threads),
-                            verify_ctxs(tbo.compression_opts.parallel_threads),
-                            verify_dict(),
-                            state((tbo.compression_opts.max_dict_bytes > 0) ? State::kBuffered
-                                                                            : State::kUnbuffered),
-                            flush_block_policy(
-                                table_options.flush_block_policy_factory->NewFlushBlockPolicy(
-                                    table_options, data_block)),
-                            flush_old_block_policy(
-                                table_options.flush_block_policy_factory->NewFlushBlockPolicy(
-                                    table_options, data_block)),
-                            reason(tbo.reason),
-                            status_ok(true),
-                            io_status_ok(true) 
-  {
-
-  }
+  Rep(const BlockBasedTableOptions& table_opt, const TableBuilderOptions& tbo,
+      const UserComparatorWrapper& user_comparator_, WritableFileWriter* f)
+      : ioptions(tbo.ioptions),
+        moptions(tbo.moptions),
+        table_options(table_opt),
+        user_comparator(user_comparator_),
+        internal_comparator(tbo.internal_comparator),
+        file(f),
+        offset(0),
+        old_offset(0),
+        alignment(table_options.block_align
+                      ? std::min(static_cast<size_t>(table_options.block_size),
+                                 kDefaultPageSize)
+                      : 0),
+        data_block(table_options.block_restart_interval,
+                   table_options.use_delta_encoding,
+                   false /* use_value_delta_encoding */,
+                   tbo.internal_comparator.user_comparator()
+                           ->CanKeysWithDifferentByteContentsBeEqual()
+                       ? BlockBasedTableOptions::kDataBlockBinarySearch
+                       : table_options.data_block_index_type,
+                   table_options.data_block_hash_table_util_ratio),
+        old_data_block(table_options.block_restart_interval,
+                       table_options.use_delta_encoding,
+                       false /* use_value_delta_encoding */,
+                       tbo.internal_comparator.user_comparator()
+                               ->CanKeysWithDifferentByteContentsBeEqual()
+                           ? BlockBasedTableOptions::kDataBlockBinarySearch
+                           : table_options.data_block_index_type,
+                       table_options.data_block_hash_table_util_ratio),
+        compression_type(tbo.compression_type),
+        sample_for_compression(tbo.moptions.sample_for_compression),
+        compressible_input_data_bytes(0),
+        uncompressible_input_data_bytes(0),
+        sampled_input_data_bytes(0),
+        sampled_output_slow_data_bytes(0),
+        sampled_output_fast_data_bytes(0),
+        compression_opts(tbo.compression_opts),
+        compression_dict(),
+        compression_ctxs(tbo.compression_opts.parallel_threads),
+        verify_ctxs(tbo.compression_opts.parallel_threads),
+        verify_dict(),
+        state((tbo.compression_opts.max_dict_bytes > 0) ? State::kBuffered
+                                                        : State::kUnbuffered),
+        flush_block_policy(
+            table_options.flush_block_policy_factory->NewFlushBlockPolicy(
+                table_options, data_block)),
+        flush_old_block_policy(
+            table_options.flush_block_policy_factory->NewFlushBlockPolicy(
+                table_options, data_block)),
+        reason(tbo.reason),
+        status_ok(true),
+        io_status_ok(true) {}
 
   bool IsParallelCompressionEnabled() const { return false; }
 
@@ -217,9 +220,8 @@ struct SeparatedBlockBasedTableBuilder::Rep {
 };
 
 SeparatedBlockBasedTableBuilder::SeparatedBlockBasedTableBuilder(
-    const BlockBasedTableOptions& table_options,
-    const TableBuilderOptions& table_builder_options,
-    WritableFileWriter* file) {
+    const BlockBasedTableOptions& table_options, const TableBuilderOptions& tbo,
+    const UserComparatorWrapper& user_comparator, WritableFileWriter* file) {
   BlockBasedTableOptions sanitized_table_options(table_options);
   if (sanitized_table_options.format_version == 0 &&
       sanitized_table_options.checksum != kCRC32c) {
@@ -232,7 +234,7 @@ SeparatedBlockBasedTableBuilder::SeparatedBlockBasedTableBuilder(
     sanitized_table_options.format_version = 1;
   }
 
-  rep_ = new Rep(sanitized_table_options, tbo, file);
+  rep_ = new Rep(sanitized_table_options, tbo, user_comparator, file);
 
   if (rep_->filter_builder != nullptr) {
     rep_->filter_builder->StartBlock(0);
@@ -560,7 +562,6 @@ struct SeparatedBlockBasedTableBuilder::ParallelCompressionRep {
   }
 };
 
-
 // Only consider Unbuffered Now
 void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
                                           const Slice& value) {
@@ -586,7 +587,7 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
         // todo: kBuffered
 
         if (ok() && r->state == Rep::State::kUnbuffered) {
-            r->index_builder->AddIndexEntry(&r->last_key, &key,
+          r->index_builder->AddIndexEntry(&r->last_key, &key,
                                           r->pending_handle);
         }
       }
@@ -600,7 +601,7 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
 
       if (r->state == Rep::State::kUnbuffered) {
         size_t ts_sz =
-              r->internal_comparator.user_comparator()->timestamp_size();
+            r->internal_comparator.user_comparator()->timestamp_size();
         r->filter_builder->Add(ExtractUserKeyAndStripTimestamp(key, ts_sz));
       }
 
@@ -612,7 +613,6 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
 
     // todo: Table Collector and Data Compression
   } else if (value_type == kTypeRangeDeletion) {
-
   } else {
     assert(false);
   }
@@ -696,8 +696,6 @@ void SeparatedBlockBasedTableBuilder::WriteBlock(
   }
 }
 
-
-
 Status SeparatedBlockBasedTableBuilder::InsertBlockInCacheHelper(
     const Slice& block_contents, const BlockHandle* handle,
     BlockType block_type, bool is_top_level_filter_block) {
@@ -778,7 +776,6 @@ void DeleteEntryCached(const Slice& /*key*/, void* value) {
   delete entry;
 }
 }  // namespace
-
 
 Status SeparatedBlockBasedTableBuilder::InsertBlockInCompressedCache(
     const Slice& block_contents, const CompressionType type,

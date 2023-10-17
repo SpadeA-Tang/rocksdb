@@ -14,7 +14,7 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
   SeparatedBlockBasedTableBuilder(
       const BlockBasedTableOptions& table_options,
       const TableBuilderOptions& table_builder_options,
-      WritableFileWriter* file);
+      const UserComparatorWrapper& user_comparator, WritableFileWriter* file);
 
   // No copying allowed
   SeparatedBlockBasedTableBuilder(const SeparatedBlockBasedTableBuilder&) =
@@ -78,7 +78,5 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
 
   const uint64_t kCompressionSizeLimit = std::numeric_limits<int>::max();
 };
-
-
 
 }  // namespace ROCKSDB_NAMESPACE
