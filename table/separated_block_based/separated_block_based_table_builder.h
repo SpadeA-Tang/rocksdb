@@ -11,10 +11,11 @@
 namespace ROCKSDB_NAMESPACE {
 
 class SeparatedBlockBasedTableBuilder : public TableBuilder {
+ public:
   SeparatedBlockBasedTableBuilder(
       const BlockBasedTableOptions& table_options,
       const TableBuilderOptions& table_builder_options,
-      const UserComparatorWrapper& user_comparator, WritableFileWriter* file);
+      const Comparator& user_comparator, WritableFileWriter* file);
 
   // No copying allowed
   SeparatedBlockBasedTableBuilder(const SeparatedBlockBasedTableBuilder&) =
@@ -34,6 +35,25 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
   IOStatus io_status() const override;
 
   Status Finish() override;
+
+  void Abandon() override;
+
+  uint64_t NumEntries() const override;
+
+  bool IsEmpty() const override;
+
+  // Size of the file generated so far.  If invoked after a successful
+  // Finish() call, returns the size of the final generated file.
+  uint64_t FileSize() const override;
+
+  // Get table properties
+  TableProperties GetTableProperties() const override;
+
+  // Get file checksum
+  std::string GetFileChecksum() const override;
+
+  // Get file checksum function name
+  const char* GetFileChecksumFuncName() const override;
 
  private:
   bool ok() const { return status().ok(); }

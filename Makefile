@@ -1690,6 +1690,9 @@ block_based_filter_block_test: $(OBJ_DIR)/table/block_based/block_based_filter_b
 block_based_table_reader_test: table/block_based/block_based_table_reader_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 
+separated_block_based_table_test: table/separated_block_based/separated_block_based_table_test.o $(TEST_LIBRARY) $(LIBRARY)
+	$(AM_LINK)
+
 full_filter_block_test: $(OBJ_DIR)/table/block_based/full_filter_block_test.o $(TEST_LIBRARY) $(LIBRARY)
 	$(AM_LINK)
 

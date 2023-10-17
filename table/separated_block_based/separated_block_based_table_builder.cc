@@ -49,7 +49,7 @@ constexpr size_t kBlockTrailerSize =
 
 struct SeparatedBlockBasedTableBuilder::Rep {
   Rep(const BlockBasedTableOptions& table_opt, const TableBuilderOptions& tbo,
-      const UserComparatorWrapper& user_comparator_, WritableFileWriter* f)
+      const Comparator& user_comparator_, WritableFileWriter* f)
       : ioptions(tbo.ioptions),
         moptions(tbo.moptions),
         table_options(table_opt),
@@ -92,13 +92,13 @@ struct SeparatedBlockBasedTableBuilder::Rep {
         verify_dict(),
         state((tbo.compression_opts.max_dict_bytes > 0) ? State::kBuffered
                                                         : State::kUnbuffered),
+        reason(tbo.reason),
         flush_block_policy(
             table_options.flush_block_policy_factory->NewFlushBlockPolicy(
                 table_options, data_block)),
         flush_old_block_policy(
             table_options.flush_block_policy_factory->NewFlushBlockPolicy(
                 table_options, data_block)),
-        reason(tbo.reason),
         status_ok(true),
         io_status_ok(true) {}
 
@@ -156,7 +156,7 @@ struct SeparatedBlockBasedTableBuilder::Rep {
   const ImmutableOptions ioptions;
   const MutableCFOptions moptions;
   const BlockBasedTableOptions table_options;
-  const UserComparatorWrapper& user_comparator;
+  const Comparator& user_comparator;
   const InternalKeyComparator& internal_comparator;
   WritableFileWriter* file;
   std::atomic<uint64_t> offset;
@@ -221,7 +221,7 @@ struct SeparatedBlockBasedTableBuilder::Rep {
 
 SeparatedBlockBasedTableBuilder::SeparatedBlockBasedTableBuilder(
     const BlockBasedTableOptions& table_options, const TableBuilderOptions& tbo,
-    const UserComparatorWrapper& user_comparator, WritableFileWriter* file) {
+    const Comparator& user_comparator, WritableFileWriter* file) {
   BlockBasedTableOptions sanitized_table_options(table_options);
   if (sanitized_table_options.format_version == 0 &&
       sanitized_table_options.checksum != kCRC32c) {

@@ -1037,6 +1037,13 @@ ROCKS_TESTS = [
         [],
     ],
     [
+        "separated_block_based_table_test",
+        "table/separated_block_based/separated_block_based_table_test.cc",
+        "parallel",
+        [],
+        [],
+    ],
+    [
         "block_cache_trace_analyzer_test",
         "tools/block_cache_analyzer/block_cache_trace_analyzer_test.cc",
         "parallel",

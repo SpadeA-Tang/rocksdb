@@ -39,8 +39,16 @@ class SeparatedBlockTest : public testing::Test {
                             compression_type, CompressionOptions(),
                             0 /* column_family_id */, kDefaultColumnFamilyName,
                             -1 /* level */),
-        BytewiseComparator(), writer.get());
-    std::unique_ptr<TableBuilder> table_builder(builder);
+        *BytewiseComparator(), writer.get());
+    std::unique_ptr<TableBuilder> table_builder(&builder);
+
+    // Build table.
+    for (auto it = kv.begin(); it != kv.end(); it++) {
+      std::string k = ToInternalKey(it->first);
+      std::string v = it->second;
+      table_builder->Add(k, v);
+    }
+    ASSERT_OK(table_builder->Finish());
   }
 
   std::string Path(const std::string& fname) { return test_dir_ + "/" + fname; }
@@ -58,9 +66,35 @@ class SeparatedBlockTest : public testing::Test {
     ASSERT_OK(fs_->NewWritableFile(path, foptions, &file, nullptr));
     writer->reset(new WritableFileWriter(std::move(file), path, env_options));
   }
+
+  static std::string ToInternalKey(const std::string& key) {
+    InternalKey internal_key(key, 0, ValueType::kTypeValue);
+    return internal_key.Encode().ToString();
+  }
 };
 
-TEST_F(SeparatedBlockTest, EmptyBuilder) {}
+TEST_F(SeparatedBlockTest, TestBuilder) {
+  std::map<std::string, std::string> kv;
+  {
+    Random rnd(101);
+    uint32_t key = 0;
+    for (int block = 0; block < 100; block++) {
+      for (int i = 0; i < 16; i++) {
+        char k[9] = {0};
+        // Internal key is constructed directly from this key,
+        // and internal key size is required to be >= 8 bytes,
+        // so use %08u as the format string.
+        sprintf(k, "%08u", key);
+        std::string v;
+        v = rnd.HumanReadableString(256);
+        kv[std::string(k)] = v;
+        key++;
+      }
+    }
+  }
+
+  CreateTable("test", CompressionType::kNoCompression, kv);
+}
 
 }  // namespace ROCKSDB_NAMESPACE
 
