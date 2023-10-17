@@ -69,6 +69,7 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
                   BlockType block_type, std::string* buffer);
   void WriteRawBlock(const Slice& data, CompressionType, BlockHandle* handle,
                      BlockType block_type, const Slice* raw_data = nullptr,
+                     std::string* buffer = nullptr,
                      bool is_top_level_filter_block = false);
 
   template <typename TBlocklike>

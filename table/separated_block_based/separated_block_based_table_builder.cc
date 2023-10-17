@@ -4,6 +4,7 @@
 #include <stdio.h>
 
 #include <atomic>
+#include <iostream>
 #include <list>
 #include <map>
 #include <memory>
@@ -23,6 +24,7 @@
 #include "rocksdb/table.h"
 #include "rocksdb/types.h"
 #include "table/block_based/block.h"
+#include "table/block_based/block_based_filter_block.h"
 #include "table/block_based/block_based_table_builder.h"
 #include "table/block_based/block_based_table_reader.h"
 #include "table/block_based/block_like_traits.h"
@@ -30,6 +32,7 @@
 #include "table/block_based/filter_policy_internal.h"
 #include "table/block_based/index_builder.h"
 #include "table/block_based/parsed_full_filter_block.h"
+#include "table/block_based/partitioned_filter_block.h"
 #include "table/format.h"
 #include "table/meta_blocks.h"
 #include "table/separated_block_based/separated_block_based_reader.h"
@@ -45,6 +48,46 @@ namespace ROCKSDB_NAMESPACE {
 namespace {
 constexpr size_t kBlockTrailerSize =
     SeparatedBlockBasedTable::kBlockTrailerSize;
+
+// Create a filter block builder based on its type.
+FilterBlockBuilder* CreateFilterBlockBuilder(
+    const ImmutableCFOptions& /*opt*/, const MutableCFOptions& mopt,
+    const FilterBuildingContext& context,
+    const bool use_delta_encoding_for_index_values,
+    PartitionedIndexBuilder* const p_index_builder) {
+  const BlockBasedTableOptions& table_opt = context.table_options;
+  assert(table_opt.filter_policy);  // precondition
+
+  FilterBitsBuilder* filter_bits_builder =
+      BloomFilterPolicy::GetBuilderFromContext(context);
+  if (filter_bits_builder == nullptr) {
+    return new BlockBasedFilterBlockBuilder(mopt.prefix_extractor.get(),
+                                            table_opt);
+  } else {
+    if (table_opt.partition_filters) {
+      assert(p_index_builder != nullptr);
+      // Since after partition cut request from filter builder it takes time
+      // until index builder actully cuts the partition, until the end of a
+      // data block potentially with many keys, we take the lower bound as
+      // partition size.
+      assert(table_opt.block_size_deviation <= 100);
+      auto partition_size =
+          static_cast<uint32_t>(((table_opt.metadata_block_size *
+                                  (100 - table_opt.block_size_deviation)) +
+                                 99) /
+                                100);
+      partition_size = std::max(partition_size, static_cast<uint32_t>(1));
+      return new PartitionedFilterBlockBuilder(
+          mopt.prefix_extractor.get(), table_opt.whole_key_filtering,
+          filter_bits_builder, table_opt.index_block_restart_interval,
+          use_delta_encoding_for_index_values, p_index_builder, partition_size);
+    } else {
+      return new FullFilterBlockBuilder(mopt.prefix_extractor.get(),
+                                        table_opt.whole_key_filtering,
+                                        filter_bits_builder);
+    }
+  }
+}
 }
 
 struct SeparatedBlockBasedTableBuilder::Rep {
@@ -78,6 +121,7 @@ struct SeparatedBlockBasedTableBuilder::Rep {
                            ? BlockBasedTableOptions::kDataBlockBinarySearch
                            : table_options.data_block_index_type,
                        table_options.data_block_hash_table_util_ratio),
+        internal_prefix_transform(tbo.moptions.prefix_extractor.get()),
         compression_type(tbo.compression_type),
         sample_for_compression(tbo.moptions.sample_for_compression),
         compressible_input_data_bytes(0),
@@ -92,15 +136,66 @@ struct SeparatedBlockBasedTableBuilder::Rep {
         verify_dict(),
         state((tbo.compression_opts.max_dict_bytes > 0) ? State::kBuffered
                                                         : State::kUnbuffered),
+        use_delta_encoding_for_index_values(table_opt.format_version >= 4 &&
+                                            !table_opt.block_align),
         reason(tbo.reason),
         flush_block_policy(
             table_options.flush_block_policy_factory->NewFlushBlockPolicy(
                 table_options, data_block)),
         flush_old_block_policy(
             table_options.flush_block_policy_factory->NewFlushBlockPolicy(
-                table_options, data_block)),
+                table_options, old_data_block)),
         status_ok(true),
-        io_status_ok(true) {}
+        io_status_ok(true) {
+    if (table_options.index_type ==
+        BlockBasedTableOptions::kTwoLevelIndexSearch) {
+      p_index_builder_ = PartitionedIndexBuilder::CreateIndexBuilder(
+          &internal_comparator, use_delta_encoding_for_index_values,
+          table_options);
+      index_builder.reset(p_index_builder_);
+      old_index_builder.reset(p_index_builder_);
+    } else {
+      index_builder.reset(IndexBuilder::CreateIndexBuilder(
+          table_options.index_type, &internal_comparator,
+          &this->internal_prefix_transform, use_delta_encoding_for_index_values,
+          table_options));
+
+      old_index_builder.reset(IndexBuilder::CreateIndexBuilder(
+          table_options.index_type, &internal_comparator,
+          &this->internal_prefix_transform, use_delta_encoding_for_index_values,
+          table_options));
+    }
+
+    if (ioptions.optimize_filters_for_hits && tbo.is_bottommost) {
+      filter_builder.reset();
+    } else if (tbo.skip_filters) {
+      filter_builder.reset();
+    } else if (tbo.skip_filters) {
+      filter_builder.reset();
+    } else if (!table_options.filter_policy) {
+      filter_builder.reset();
+    } else {
+      FilterBuildingContext filter_context(table_options);
+
+      filter_context.info_log = ioptions.logger;
+      filter_context.column_family_name = tbo.column_family_name;
+      filter_context.reason = reason;
+
+      // Only populate other fields if known to be in LSM rather than
+      // generating external SST file
+      if (reason != TableFileCreationReason::kMisc) {
+        filter_context.compaction_style = ioptions.compaction_style;
+        filter_context.num_levels = ioptions.num_levels;
+        filter_context.level_at_creation = tbo.level_at_creation;
+        filter_context.is_bottommost = tbo.is_bottommost;
+        assert(filter_context.level_at_creation < filter_context.num_levels);
+      }
+
+      filter_builder.reset(CreateFilterBlockBuilder(
+          ioptions, moptions, filter_context,
+          use_delta_encoding_for_index_values, p_index_builder_));
+    }
+  }
 
   bool IsParallelCompressionEnabled() const { return false; }
 
@@ -120,14 +215,32 @@ struct SeparatedBlockBasedTableBuilder::Rep {
     return status;
   }
 
-  uint64_t get_offset() { return offset.load(std::memory_order_relaxed); }
-  void set_offset(uint64_t o) { offset.store(o, std::memory_order_relaxed); }
-
-  uint64_t get_old_offset() {
-    return old_offset.load(std::memory_order_relaxed);
+  IOStatus GetIOStatus() {
+    // We need to make modifications of io_status visible when status_ok is set
+    // to false, and this is ensured by io_status_mutex, so no special memory
+    // order for io_status_ok is required.
+    if (io_status_ok.load(std::memory_order_relaxed)) {
+      return IOStatus::OK();
+    } else {
+      return CopyIOStatus();
+    }
   }
-  void set_old_offset(uint64_t o) {
-    old_offset.store(o, std::memory_order_relaxed);
+
+  IOStatus CopyIOStatus() {
+    std::lock_guard<std::mutex> lock(io_status_mutex);
+    return io_status;
+  }
+
+  uint64_t get_offset(bool new_data_block) {
+    return new_data_block ? offset.load(std::memory_order_relaxed)
+                          : old_offset.load(std::memory_order_relaxed);
+  }
+  void set_offset(bool new_data_block, uint64_t o) {
+    if (new_data_block) {
+      offset.store(o, std::memory_order_relaxed);
+    } else {
+      old_offset.store(o, std::memory_order_relaxed);
+    }
   }
 
   // Never erase an existing status that is not OK.
@@ -167,7 +280,10 @@ struct SeparatedBlockBasedTableBuilder::Rep {
   std::vector<BlockHandle> old_block_handles;
   std::string old_data_buffer;
 
+  InternalKeySliceTransform internal_prefix_transform;
   std::unique_ptr<IndexBuilder> index_builder;
+  std::unique_ptr<IndexBuilder> old_index_builder;
+  PartitionedIndexBuilder* p_index_builder_ = nullptr;
 
   std::string last_key;
   const Slice* first_key_in_next_block = nullptr;
@@ -195,7 +311,7 @@ struct SeparatedBlockBasedTableBuilder::Rep {
   State state;
 
   BlockHandle pending_handle;  // Handle to add to index block
-
+  const bool use_delta_encoding_for_index_values;
   std::unique_ptr<FilterBlockBuilder> filter_builder;
   OffsetableCacheKey base_cache_key;
   const TableFileCreationReason reason;
@@ -597,12 +713,19 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
         assert(!r->old_data_block.empty());
         r->first_key_in_next_old_block = &key;
         FlushOldDataBlock();
+
+        if (ok() && r->state == Rep::State::kUnbuffered) {
+          r->old_index_builder->AddIndexEntry(&r->last_key, &key,
+                                              r->old_block_handles.back());
+        }
       }
 
       if (r->state == Rep::State::kUnbuffered) {
-        size_t ts_sz =
-            r->internal_comparator.user_comparator()->timestamp_size();
-        r->filter_builder->Add(ExtractUserKeyAndStripTimestamp(key, ts_sz));
+        if (r->filter_builder != nullptr) {
+          size_t ts_sz =
+              r->internal_comparator.user_comparator()->timestamp_size();
+          r->filter_builder->Add(ExtractUserKeyAndStripTimestamp(key, ts_sz));
+        }
       }
 
       r->data_block.AddWithLastKey(key, value, r->last_key);
@@ -642,8 +765,8 @@ void SeparatedBlockBasedTableBuilder::FlushOldDataBlock() {
   Rep* r = rep_;
   assert(rep_->state != Rep::State::kClosed);
   if (!ok()) return;
-  if (r->data_block.empty()) return;
   r->old_block_handles.push_back({});
+  if (r->data_block.empty()) return;
   WriteBlock(&r->old_data_block, &(r->old_block_handles.back()),
              BlockType::kData, &r->old_data_buffer);
 }
@@ -678,20 +801,16 @@ void SeparatedBlockBasedTableBuilder::WriteBlock(
     return;
   }
 
-  if (buffer == nullptr) {
-    WriteRawBlock(block_contents, type, handle, block_type,
-                  &raw_block_contents);
-  } else {
-    handle->set_offset(r->get_old_offset());
-    handle->set_size(block_contents.size());
-    // todo: checksum
-  }
+  WriteRawBlock(block_contents, type, handle, block_type, &raw_block_contents,
+                buffer);
+
   r->compressed_output.clear();
   if (is_data_block) {
     if (r->filter_builder != nullptr) {
-      r->filter_builder->StartBlock(r->get_offset());
+      // todo: consider block-based-bloom-filter
+      r->filter_builder->StartBlock(r->get_offset(true));
     }
-    r->props.data_size = r->get_offset();
+    r->props.data_size = r->get_offset(false) + r->get_offset(true);
     ++r->props.num_data_blocks;
   }
 }
@@ -809,26 +928,104 @@ Status SeparatedBlockBasedTableBuilder::InsertBlockInCompressedCache(
       RecordTick(rep_->ioptions.stats, BLOCK_CACHE_COMPRESSED_ADD_FAILURES);
     }
     // Invalidate OS cache.
-    r->file->InvalidateCache(static_cast<size_t>(r->get_offset()), size)
+    // todo: consider old_block_cache
+    r->file->InvalidateCache(static_cast<size_t>(r->get_offset(true)), size)
         .PermitUncheckedError();
   }
   return s;
 }
 
+Status SeparatedBlockBasedTableBuilder::Finish() {
+  Rep* r = rep_;
+  assert(r->state != Rep::State::kClosed);
+  bool empty_data_block = r->data_block.empty();
+  r->first_key_in_next_block = nullptr;
+  FlushNewDataBlock();
+  if (ok() && !empty_data_block) {
+    r->index_builder->AddIndexEntry(
+        &r->last_key, nullptr /* no next data block */, r->pending_handle);
+  }
+
+  return Status{};
+}
+
+void SeparatedBlockBasedTableBuilder::Abandon() {
+  assert(rep_->state != Rep::State::kClosed);
+  rep_->state = Rep::State::kClosed;
+}
+
+uint64_t SeparatedBlockBasedTableBuilder::NumEntries() const {
+  return rep_->props.num_entries;
+}
+
+bool SeparatedBlockBasedTableBuilder::IsEmpty() const {
+  return rep_->props.num_entries == 0 && rep_->props.num_range_deletions == 0;
+}
+
+uint64_t SeparatedBlockBasedTableBuilder::FileSize() const {
+  return rep_->offset;
+}
+
+TableProperties SeparatedBlockBasedTableBuilder::GetTableProperties() const {
+  TableProperties ret = rep_->props;
+  for (const auto& collector : rep_->table_properties_collectors) {
+    for (const auto& prop : collector->GetReadableProperties()) {
+      ret.readable_properties.insert(prop);
+    }
+    collector->Finish(&ret.user_collected_properties).PermitUncheckedError();
+  }
+  return ret;
+}
+
+std::string SeparatedBlockBasedTableBuilder::GetFileChecksum() const {
+  if (rep_->file != nullptr) {
+    return rep_->file->GetFileChecksum();
+  } else {
+    return kUnknownFileChecksum;
+  }
+}
+
+const char* SeparatedBlockBasedTableBuilder::GetFileChecksumFuncName() const {
+  if (rep_->file != nullptr) {
+    return rep_->file->GetFileChecksumFuncName();
+  } else {
+    return kUnknownFileChecksumFuncName;
+  }
+}
+
+Status SeparatedBlockBasedTableBuilder::status() const {
+  return rep_->GetStatus();
+}
+
+IOStatus SeparatedBlockBasedTableBuilder::io_status() const {
+  return rep_->GetIOStatus();
+}
+
 void SeparatedBlockBasedTableBuilder::WriteRawBlock(
     const Slice& block_contents, CompressionType type, BlockHandle* handle,
-    BlockType block_type, const Slice* raw_block_contents,
+    BlockType block_type, const Slice* raw_block_contents, std::string* buffer,
     bool is_top_level_filter_block) {
+  //  std::cout << block_contents.ToString(true) << std::endl;
+  //  std::cout << "====================" << std::endl;
+  //  std::cout << raw_block_contents->ToString(true) << std::endl;
   Rep* r = rep_;
   bool is_data_block = block_type == BlockType::kData;
   Status s = Status::OK();
   IOStatus io_s = IOStatus::OK();
   StopWatch sw(r->ioptions.clock, r->ioptions.stats, WRITE_RAW_BLOCK_MICROS);
-  handle->set_offset(r->get_offset());
+  handle->set_offset(r->get_offset(buffer == nullptr));
   handle->set_size(block_contents.size());
   assert(status().ok());
   assert(io_status().ok());
-  io_s = r->file->Append(block_contents);
+  if (buffer == nullptr) {
+    std::cout << "new_handle, off " << handle->offset() << ", size "
+              << handle->size() << std::endl;
+    io_s = r->file->Append(block_contents);
+  } else {
+    std::cout << "old_handle, off " << handle->offset() << ", size "
+              << handle->size() << std::endl;
+    buffer->append(block_contents.data(), block_contents.size());
+  }
   if (io_s.ok()) {
     std::array<char, kBlockTrailerSize> trailer;
     trailer[0] = type;
@@ -841,7 +1038,11 @@ void SeparatedBlockBasedTableBuilder::WriteRawBlock(
     TEST_SYNC_POINT_CALLBACK(
         "BlockBasedTableBuilder::WriteRawBlock:TamperWithChecksum",
         trailer.data());
-    io_s = r->file->Append(Slice(trailer.data(), trailer.size()));
+    if (buffer == nullptr) {
+      io_s = r->file->Append(Slice(trailer.data(), trailer.size()));
+    } else {
+      buffer->append(trailer.data(), trailer.size());
+    }
     if (io_s.ok()) {
       assert(s.ok());
       bool warm_cache;
@@ -879,8 +1080,9 @@ void SeparatedBlockBasedTableBuilder::WriteRawBlock(
       r->SetIOStatus(io_s);
     }
     if (s.ok() && io_s.ok()) {
-      r->set_offset(r->get_offset() + block_contents.size() +
-                    kBlockTrailerSize);
+      r->set_offset(buffer == nullptr, r->get_offset(buffer == nullptr) +
+                                           block_contents.size() +
+                                           kBlockTrailerSize);
       if (r->table_options.block_align && is_data_block) {
         size_t pad_bytes =
             (r->alignment - ((block_contents.size() + kBlockTrailerSize) &
@@ -888,17 +1090,19 @@ void SeparatedBlockBasedTableBuilder::WriteRawBlock(
             (r->alignment - 1);
         io_s = r->file->Pad(pad_bytes);
         if (io_s.ok()) {
-          r->set_offset(r->get_offset() + pad_bytes);
+          r->set_offset(buffer == nullptr,
+                        r->get_offset(buffer == nullptr) + pad_bytes);
         } else {
           r->SetIOStatus(io_s);
         }
       }
       if (r->IsParallelCompressionEnabled()) {
         if (is_data_block) {
-          r->pc_rep->file_size_estimator.ReapBlock(block_contents.size(),
-                                                   r->get_offset());
+          r->pc_rep->file_size_estimator.ReapBlock(
+              block_contents.size(), r->get_offset(buffer == nullptr));
         } else {
-          r->pc_rep->file_size_estimator.SetEstimatedFileSize(r->get_offset());
+          r->pc_rep->file_size_estimator.SetEstimatedFileSize(
+              r->get_offset(buffer == nullptr));
         }
       }
     }

@@ -815,6 +815,7 @@ set(SOURCES
         table/block_based/partitioned_index_reader.cc
         table/block_based/reader_common.cc
         table/block_based/uncompression_dict_reader.cc
+        table/separated_block_based/separated_block_based_table_factory.cc
         table/separated_block_based/separated_block_based_table_builder.cc
         table/separated_block_based/separated_block_based_table_test.cc
         table/block_fetcher.cc
@@ -1310,6 +1311,7 @@ if(WITH_TESTS)
         table/block_based/data_block_hash_index_test.cc
         table/block_based/full_filter_block_test.cc
         table/block_based/partitioned_filter_block_test.cc
+        table/separated_block_based/separated_block_based_table_test.cc
         table/cleanable_test.cc
         table/cuckoo/cuckoo_table_builder_test.cc
         table/cuckoo/cuckoo_table_reader_test.cc

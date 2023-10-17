@@ -5,7 +5,7 @@
 #include "port/stack_trace.h"
 #include "rocksdb/db.h"
 #include "rocksdb/file_system.h"
-#include "table/block_based/block_based_table_factory.h"
+#include "separated_block_based_table_factory.h"
 #include "table/block_based/partitioned_index_iterator.h"
 #include "table/format.h"
 #include "table/separated_block_based/separated_block_based_reader.h"
@@ -16,9 +16,30 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-class SeparatedBlockTest : public testing::Test {
+class SeparatedBlockTest
+    : public testing::Test,
+      public testing::WithParamInterface<std::tuple<
+          CompressionType, bool, BlockBasedTableOptions::IndexType, bool>> {
  protected:
-  SeparatedBlockTest() {}
+ protected:
+  CompressionType compression_type_;
+  bool use_direct_reads_;
+
+  void SetUp() override {
+    test_dir_ = test::PerThreadDBPath("SeparatedBlockTest");
+    env_ = Env::Default();
+    fs_ = FileSystem::Default();
+    ASSERT_OK(fs_->CreateDir(test_dir_, IOOptions(), nullptr));
+
+    BlockBasedTableOptions opts;
+    opts.index_type = BlockBasedTableOptions::IndexType::kBinarySearch;
+    opts.no_block_cache = false;
+    opts.block_size = 600;
+    table_factory_.reset(static_cast<SeparatedBlockBasedTableFactory*>(
+        NewSeparatedBlockBasedTableFactory(opts)));
+  }
+
+  void TearDown() override { EXPECT_OK(DestroyDir(env_, test_dir_)); }
 
   void CreateTable(const std::string& table_name,
                    const CompressionType& compression_type,
@@ -33,20 +54,20 @@ class SeparatedBlockTest : public testing::Test {
     ColumnFamilyOptions cf_options;
     MutableCFOptions moptions(cf_options);
     IntTblPropCollectorFactories factories;
-    SeparatedBlockBasedTableBuilder builder(
-        BlockBasedTableOptions{},
+    std::unique_ptr<TableBuilder> table_builder(table_factory_->NewTableBuilder(
         TableBuilderOptions(ioptions, moptions, comparator, &factories,
                             compression_type, CompressionOptions(),
                             0 /* column_family_id */, kDefaultColumnFamilyName,
                             -1 /* level */),
-        *BytewiseComparator(), writer.get());
-    std::unique_ptr<TableBuilder> table_builder(&builder);
+        writer.get()));
 
     // Build table.
     for (auto it = kv.begin(); it != kv.end(); it++) {
-      std::string k = ToInternalKey(it->first);
-      std::string v = it->second;
-      table_builder->Add(k, v);
+      for (uint64_t j = 3; j > 0; j--) {
+        std::string k = ToInternalKey(it->first, SequenceNumber(j));
+        std::string v = it->second;
+        table_builder->Add(k, v);
+      }
     }
     ASSERT_OK(table_builder->Finish());
   }
@@ -55,7 +76,9 @@ class SeparatedBlockTest : public testing::Test {
 
  private:
   std::string test_dir_;
+  Env* env_;
   std::shared_ptr<FileSystem> fs_;
+  std::unique_ptr<SeparatedBlockBasedTableFactory> table_factory_;
 
   void NewFileWriter(const std::string& filename,
                      std::unique_ptr<WritableFileWriter>* writer) {
@@ -67,8 +90,8 @@ class SeparatedBlockTest : public testing::Test {
     writer->reset(new WritableFileWriter(std::move(file), path, env_options));
   }
 
-  static std::string ToInternalKey(const std::string& key) {
-    InternalKey internal_key(key, 0, ValueType::kTypeValue);
+  static std::string ToInternalKey(const std::string& key, SequenceNumber s) {
+    InternalKey internal_key(key, s, ValueType::kTypeValue);
     return internal_key.Encode().ToString();
   }
 };
@@ -86,7 +109,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
         // so use %08u as the format string.
         sprintf(k, "%08u", key);
         std::string v;
-        v = rnd.HumanReadableString(256);
+        v = rnd.HumanReadableString(10);
         kv[std::string(k)] = v;
         key++;
       }
@@ -99,6 +122,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
 }  // namespace ROCKSDB_NAMESPACE
 
 int main(int argc, char** argv) {
+  ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

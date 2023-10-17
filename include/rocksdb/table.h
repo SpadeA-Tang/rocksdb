@@ -527,6 +527,10 @@ struct BlockBasedTablePropertyNames {
 extern TableFactory* NewBlockBasedTableFactory(
     const BlockBasedTableOptions& table_options = BlockBasedTableOptions());
 
+// Create default block based table factory.
+extern TableFactory* NewSeparatedBlockBasedTableFactory(
+    const BlockBasedTableOptions& table_options = BlockBasedTableOptions());
+
 #ifndef ROCKSDB_LITE
 
 enum EncodingType : char {
