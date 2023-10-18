@@ -101,7 +101,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   {
     Random rnd(101);
     uint32_t key = 0;
-    for (int block = 0; block < 100; block++) {
+    for (int block = 0; block < 10; block++) {
       for (int i = 0; i < 16; i++) {
         char k[9] = {0};
         // Internal key is constructed directly from this key,

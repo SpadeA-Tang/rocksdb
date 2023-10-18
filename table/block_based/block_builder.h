@@ -60,8 +60,6 @@ class BlockBuilder {
   // lifetime of this builder or until Reset() is called.
   Slice Finish();
 
-  Slice FinishWithBuffer();
-
   // Returns an estimate of the current (uncompressed) size of the block
   // we are building.
   inline size_t CurrentSizeEstimate() const {

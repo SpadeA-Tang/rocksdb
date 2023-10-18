@@ -231,17 +231,8 @@ struct SeparatedBlockBasedTableBuilder::Rep {
     return io_status;
   }
 
-  uint64_t get_offset(bool new_data_block) {
-    return new_data_block ? offset.load(std::memory_order_relaxed)
-                          : old_offset.load(std::memory_order_relaxed);
-  }
-  void set_offset(bool new_data_block, uint64_t o) {
-    if (new_data_block) {
-      offset.store(o, std::memory_order_relaxed);
-    } else {
-      old_offset.store(o, std::memory_order_relaxed);
-    }
-  }
+  uint64_t get_offset() { return offset.load(std::memory_order_relaxed); }
+  void set_offset(uint64_t o) { offset.store(o, std::memory_order_relaxed); }
 
   // Never erase an existing status that is not OK.
   void SetStatus(Status s) {
@@ -277,8 +268,9 @@ struct SeparatedBlockBasedTableBuilder::Rep {
   size_t alignment;
   BlockBuilder data_block;
   BlockBuilder old_data_block;
+  std::vector<std::string> old_data_buffers;
+  std::vector<std::pair<std::string, std::string>> old_index_metas;
   std::vector<BlockHandle> old_block_handles;
-  std::string old_data_buffer;
 
   InternalKeySliceTransform internal_prefix_transform;
   std::unique_ptr<IndexBuilder> index_builder;
@@ -286,6 +278,9 @@ struct SeparatedBlockBasedTableBuilder::Rep {
   PartitionedIndexBuilder* p_index_builder_ = nullptr;
 
   std::string last_key;
+  std::string last_new_key;
+  std::string last_old_key;
+  bool old_block_flushed = false;
   const Slice* first_key_in_next_block = nullptr;
   CompressionType compression_type;
   uint64_t sample_for_compression;
@@ -703,7 +698,7 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
         // todo: kBuffered
 
         if (ok() && r->state == Rep::State::kUnbuffered) {
-          r->index_builder->AddIndexEntry(&r->last_key, &key,
+          r->index_builder->AddIndexEntry(&r->last_new_key, &key,
                                           r->pending_handle);
         }
       }
@@ -713,11 +708,6 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
         assert(!r->old_data_block.empty());
         r->first_key_in_next_old_block = &key;
         FlushOldDataBlock();
-
-        if (ok() && r->state == Rep::State::kUnbuffered) {
-          r->old_index_builder->AddIndexEntry(&r->last_key, &key,
-                                              r->old_block_handles.back());
-        }
       }
 
       if (r->state == Rep::State::kUnbuffered) {
@@ -728,9 +718,15 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
         }
       }
 
-      r->data_block.AddWithLastKey(key, value, r->last_key);
+      r->data_block.AddWithLastKey(key, value, r->last_new_key);
+      r->last_new_key.assign(key.data(), key.size());
     } else {
-      r->old_data_block.AddWithLastKey(key, value, r->last_key);
+      if (r->old_block_flushed) {
+        r->old_block_flushed = false;
+        r->old_index_metas.push_back(std::make_pair(r->last_old_key, key.ToString()));
+      }
+      r->old_data_block.AddWithLastKey(key, value, r->last_old_key);
+      r->last_old_key.assign(key.data(), key.size());
     }
     r->last_key.assign(key.data(), key.size());
 
@@ -758,34 +754,37 @@ void SeparatedBlockBasedTableBuilder::FlushNewDataBlock() {
   assert(rep_->state != Rep::State::kClosed);
   if (!ok()) return;
   if (r->data_block.empty()) return;
-  WriteBlock(&r->data_block, &r->pending_handle, BlockType::kData, nullptr);
+  WriteBlock(&r->data_block, &r->pending_handle, BlockType::kData);
 }
 
 void SeparatedBlockBasedTableBuilder::FlushOldDataBlock() {
   Rep* r = rep_;
   assert(rep_->state != Rep::State::kClosed);
   if (!ok()) return;
-  r->old_block_handles.push_back({});
-  if (r->data_block.empty()) return;
-  WriteBlock(&r->old_data_block, &(r->old_block_handles.back()),
-             BlockType::kData, &r->old_data_buffer);
+  if (r->old_data_block.empty()) return;
+
+  r->old_data_block.Finish();
+  std::string raw_block_contents;
+  raw_block_contents.reserve(rep_->table_options.block_size);
+  r->old_data_block.SwapAndReset(raw_block_contents);
+  r->old_data_buffers.push_back(std::move(raw_block_contents));
+  r->old_block_flushed = true;
 }
 
 void SeparatedBlockBasedTableBuilder::WriteBlock(BlockBuilder* block,
                                                  BlockHandle* handle,
-                                                 BlockType block_type,
-                                                 std::string* buffer) {
+                                                 BlockType block_type) {
   block->Finish();
   std::string raw_block_contents;
   raw_block_contents.reserve(rep_->table_options.block_size);
   block->SwapAndReset(raw_block_contents);
   // todo: kBuffered
-  WriteBlock(raw_block_contents, handle, block_type, buffer);
+  WriteBlock(raw_block_contents, handle, block_type);
 }
 
 void SeparatedBlockBasedTableBuilder::WriteBlock(
-    const Slice& raw_block_contents, BlockHandle* handle, BlockType block_type,
-    std::string* buffer) {
+    const Slice& raw_block_contents, BlockHandle* handle,
+    BlockType block_type) {
   Rep* r = rep_;
   assert(r->state == Rep::State::kUnbuffered);
   Slice block_contents;
@@ -801,16 +800,15 @@ void SeparatedBlockBasedTableBuilder::WriteBlock(
     return;
   }
 
-  WriteRawBlock(block_contents, type, handle, block_type, &raw_block_contents,
-                buffer);
+  WriteRawBlock(block_contents, type, handle, block_type, &raw_block_contents);
 
   r->compressed_output.clear();
   if (is_data_block) {
     if (r->filter_builder != nullptr) {
       // todo: consider block-based-bloom-filter
-      r->filter_builder->StartBlock(r->get_offset(true));
+      r->filter_builder->StartBlock(r->get_offset());
     }
-    r->props.data_size = r->get_offset(false) + r->get_offset(true);
+    r->props.data_size = r->get_offset() + r->get_offset();
     ++r->props.num_data_blocks;
   }
 }
@@ -929,10 +927,277 @@ Status SeparatedBlockBasedTableBuilder::InsertBlockInCompressedCache(
     }
     // Invalidate OS cache.
     // todo: consider old_block_cache
-    r->file->InvalidateCache(static_cast<size_t>(r->get_offset(true)), size)
+    r->file->InvalidateCache(static_cast<size_t>(r->get_offset()), size)
         .PermitUncheckedError();
   }
   return s;
+}
+
+void SeparatedBlockBasedTableBuilder::WriteFilterBlock(
+    MetaIndexBuilder* meta_index_builder) {
+  BlockHandle filter_block_handle;
+  bool empty_filter_block =
+      (rep_->filter_builder == nullptr || rep_->filter_builder->IsEmpty());
+  if (ok() && !empty_filter_block) {
+    rep_->props.num_filter_entries +=
+        rep_->filter_builder->EstimateEntriesAdded();
+    Status s = Status::Incomplete();
+    while (ok() && s.IsIncomplete()) {
+      // filter_data is used to store the transferred filter data payload from
+      // FilterBlockBuilder and deallocate the payload by going out of scope.
+      // Otherwise, the payload will unnecessarily remain until
+      // BlockBasedTableBuilder is deallocated.
+      //
+      // See FilterBlockBuilder::Finish() for more on the difference in
+      // transferred filter data payload among different FilterBlockBuilder
+      // subtypes.
+      std::unique_ptr<const char[]> filter_data;
+      Slice filter_content =
+          rep_->filter_builder->Finish(filter_block_handle, &s, &filter_data);
+      assert(s.ok() || s.IsIncomplete());
+      rep_->props.filter_size += filter_content.size();
+
+      // TODO: Refactor code so that BlockType can determine both the C++ type
+      // of a block cache entry (TBlocklike) and the CacheEntryRole while
+      // inserting blocks in cache.
+      bool top_level_filter_block = false;
+      if (s.ok() && rep_->table_options.partition_filters &&
+          !rep_->filter_builder->IsBlockBased()) {
+        top_level_filter_block = true;
+      }
+      WriteRawBlock(filter_content, kNoCompression, &filter_block_handle,
+                    BlockType::kFilter, nullptr /*raw_contents*/,
+                    top_level_filter_block);
+    }
+    rep_->filter_builder->ResetFilterBitsBuilder();
+  }
+  if (ok() && !empty_filter_block) {
+    // Add mapping from "<filter_block_prefix>.Name" to location
+    // of filter data.
+    std::string key;
+    if (rep_->filter_builder->IsBlockBased()) {
+      key = BlockBasedTable::kFilterBlockPrefix;
+    } else {
+      key = rep_->table_options.partition_filters
+                ? BlockBasedTable::kPartitionedFilterBlockPrefix
+                : BlockBasedTable::kFullFilterBlockPrefix;
+    }
+    key.append(rep_->table_options.filter_policy->Name());
+    meta_index_builder->Add(key, filter_block_handle);
+  }
+}
+
+void SeparatedBlockBasedTableBuilder::WriteIndexBlock(
+    MetaIndexBuilder* meta_index_builder, BlockHandle* index_block_handle,
+    IndexBuilder* index_builder) {
+  IndexBuilder::IndexBlocks index_blocks;
+  auto index_builder_status = index_builder->Finish(&index_blocks);
+  if (index_builder_status.IsIncomplete()) {
+    // We we have more than one index partition then meta_blocks are not
+    // supported for the index. Currently meta_blocks are used only by
+    // HashIndexBuilder which is not multi-partition.
+    assert(index_blocks.meta_blocks.empty());
+  } else if (ok() && !index_builder_status.ok()) {
+    rep_->SetStatus(index_builder_status);
+  }
+  if (ok()) {
+    for (const auto& item : index_blocks.meta_blocks) {
+      BlockHandle block_handle;
+      WriteBlock(item.second, &block_handle, BlockType::kIndex);
+      if (!ok()) {
+        break;
+      }
+      meta_index_builder->Add(item.first, block_handle);
+    }
+  }
+  if (ok()) {
+    if (rep_->table_options.enable_index_compression) {
+      WriteBlock(index_blocks.index_block_contents, index_block_handle,
+                 BlockType::kIndex);
+    } else {
+      WriteRawBlock(index_blocks.index_block_contents, kNoCompression,
+                    index_block_handle, BlockType::kIndex);
+    }
+  }
+  // If there are more index partitions, finish them and write them out
+  if (index_builder_status.IsIncomplete()) {
+    bool index_building_finished = false;
+    while (ok() && !index_building_finished) {
+      Status s = index_builder->Finish(&index_blocks, *index_block_handle);
+      if (s.ok()) {
+        index_building_finished = true;
+      } else if (s.IsIncomplete()) {
+        // More partitioned index after this one
+        assert(!index_building_finished);
+      } else {
+        // Error
+        rep_->SetStatus(s);
+        return;
+      }
+
+      if (rep_->table_options.enable_index_compression) {
+        WriteBlock(index_blocks.index_block_contents, index_block_handle,
+                   BlockType::kIndex);
+      } else {
+        WriteRawBlock(index_blocks.index_block_contents, kNoCompression,
+                      index_block_handle, BlockType::kIndex);
+      }
+      // The last index_block_handle will be for the partition index block
+    }
+  }
+}
+
+void SeparatedBlockBasedTableBuilder::WritePropertiesBlock(
+    MetaIndexBuilder* meta_index_builder) {
+  BlockHandle properties_block_handle;
+  if (ok()) {
+    PropertyBlockBuilder property_block_builder;
+    rep_->props.filter_policy_name =
+        rep_->table_options.filter_policy != nullptr
+            ? rep_->table_options.filter_policy->Name()
+            : "";
+    rep_->props.index_size =
+        rep_->index_builder->IndexSize() + kBlockTrailerSize;
+    rep_->props.comparator_name = rep_->ioptions.user_comparator != nullptr
+                                      ? rep_->ioptions.user_comparator->Name()
+                                      : "nullptr";
+    rep_->props.merge_operator_name =
+        rep_->ioptions.merge_operator != nullptr
+            ? rep_->ioptions.merge_operator->Name()
+            : "nullptr";
+    rep_->props.compression_name =
+        CompressionTypeToString(rep_->compression_type);
+    rep_->props.compression_options =
+        CompressionOptionsToString(rep_->compression_opts);
+    rep_->props.prefix_extractor_name =
+        rep_->moptions.prefix_extractor != nullptr
+            ? rep_->moptions.prefix_extractor->AsString()
+            : "nullptr";
+    std::string property_collectors_names = "[";
+    for (size_t i = 0;
+         i < rep_->ioptions.table_properties_collector_factories.size(); ++i) {
+      if (i != 0) {
+        property_collectors_names += ",";
+      }
+      property_collectors_names +=
+          rep_->ioptions.table_properties_collector_factories[i]->Name();
+    }
+    property_collectors_names += "]";
+    rep_->props.property_collectors_names = property_collectors_names;
+    if (rep_->table_options.index_type ==
+        BlockBasedTableOptions::kTwoLevelIndexSearch) {
+      assert(rep_->p_index_builder_ != nullptr);
+      rep_->props.index_partitions = rep_->p_index_builder_->NumPartitions();
+      rep_->props.top_level_index_size =
+          rep_->p_index_builder_->TopLevelIndexSize(rep_->offset);
+    }
+    rep_->props.index_key_is_user_key =
+        !rep_->index_builder->seperator_is_key_plus_seq();
+    rep_->props.index_value_is_delta_encoded =
+        rep_->use_delta_encoding_for_index_values;
+    if (rep_->sampled_input_data_bytes > 0) {
+      rep_->props.slow_compression_estimated_data_size = static_cast<uint64_t>(
+          static_cast<double>(rep_->sampled_output_slow_data_bytes) /
+              rep_->sampled_input_data_bytes *
+              rep_->compressible_input_data_bytes +
+          rep_->uncompressible_input_data_bytes + 0.5);
+      rep_->props.fast_compression_estimated_data_size = static_cast<uint64_t>(
+          static_cast<double>(rep_->sampled_output_fast_data_bytes) /
+              rep_->sampled_input_data_bytes *
+              rep_->compressible_input_data_bytes +
+          rep_->uncompressible_input_data_bytes + 0.5);
+    } else if (rep_->sample_for_compression > 0) {
+      // We tried to sample but none were found. Assume worst-case (compression
+      // ratio 1.0) so data is complete and aggregatable.
+      rep_->props.slow_compression_estimated_data_size =
+          rep_->compressible_input_data_bytes +
+          rep_->uncompressible_input_data_bytes;
+      rep_->props.fast_compression_estimated_data_size =
+          rep_->compressible_input_data_bytes +
+          rep_->uncompressible_input_data_bytes;
+    }
+
+    // Add basic properties
+    property_block_builder.AddTableProperty(rep_->props);
+
+    // Add use collected properties
+    NotifyCollectTableCollectorsOnFinish(rep_->table_properties_collectors,
+                                         rep_->ioptions.logger,
+                                         &property_block_builder);
+
+    Slice block_data = property_block_builder.Finish();
+    TEST_SYNC_POINT_CALLBACK(
+        "BlockBasedTableBuilder::WritePropertiesBlock:BlockData", &block_data);
+    WriteRawBlock(block_data, kNoCompression, &properties_block_handle,
+                  BlockType::kProperties);
+  }
+  if (ok()) {
+#ifndef NDEBUG
+    {
+      uint64_t props_block_offset = properties_block_handle.offset();
+      uint64_t props_block_size = properties_block_handle.size();
+      TEST_SYNC_POINT_CALLBACK(
+          "BlockBasedTableBuilder::WritePropertiesBlock:GetPropsBlockOffset",
+          &props_block_offset);
+      TEST_SYNC_POINT_CALLBACK(
+          "BlockBasedTableBuilder::WritePropertiesBlock:GetPropsBlockSize",
+          &props_block_size);
+    }
+#endif  // !NDEBUG
+
+    const std::string* properties_block_meta = &kPropertiesBlockName;
+    TEST_SYNC_POINT_CALLBACK(
+        "BlockBasedTableBuilder::WritePropertiesBlock:Meta",
+        &properties_block_meta);
+    meta_index_builder->Add(*properties_block_meta, properties_block_handle);
+  }
+}
+
+void SeparatedBlockBasedTableBuilder::WriteCompressionDictBlock(
+    MetaIndexBuilder* meta_index_builder) {
+  if (rep_->compression_dict != nullptr &&
+      rep_->compression_dict->GetRawDict().size()) {
+    BlockHandle compression_dict_block_handle;
+    if (ok()) {
+      WriteRawBlock(rep_->compression_dict->GetRawDict(), kNoCompression,
+                    &compression_dict_block_handle,
+                    BlockType::kCompressionDictionary);
+#ifndef NDEBUG
+      Slice compression_dict = rep_->compression_dict->GetRawDict();
+      TEST_SYNC_POINT_CALLBACK(
+          "BlockBasedTableBuilder::WriteCompressionDictBlock:RawDict",
+          &compression_dict);
+#endif  // NDEBUG
+    }
+    if (ok()) {
+      meta_index_builder->Add(kCompressionDictBlockName,
+                              compression_dict_block_handle);
+    }
+  }
+}
+
+void SeparatedBlockBasedTableBuilder::WriteRangeDelBlock(
+    MetaIndexBuilder* meta_index_builder) {}
+
+void SeparatedBlockBasedTableBuilder::WriteFooter(
+    BlockHandle& metaindex_block_handle, BlockHandle& index_block_handle) {
+  Rep* r = rep_;
+  // this is guaranteed by BlockBasedTableBuilder's constructor
+  assert(r->table_options.checksum == kCRC32c ||
+         r->table_options.format_version != 0);
+  assert(ok());
+
+  FooterBuilder footer;
+  footer.Build(kBlockBasedTableMagicNumber, r->table_options.format_version,
+               r->get_offset(), r->table_options.checksum,
+               metaindex_block_handle, index_block_handle);
+  IOStatus ios = r->file->Append(footer.GetSlice());
+  if (ios.ok()) {
+    r->set_offset(r->get_offset() + footer.GetSlice().size());
+  } else {
+    r->SetIOStatus(ios);
+    r->SetStatus(ios);
+  }
 }
 
 Status SeparatedBlockBasedTableBuilder::Finish() {
@@ -945,6 +1210,49 @@ Status SeparatedBlockBasedTableBuilder::Finish() {
     r->index_builder->AddIndexEntry(
         &r->last_key, nullptr /* no next data block */, r->pending_handle);
   }
+
+  if (r->old_block_flushed) {
+    r->old_index_metas.push_back(std::make_pair(r->last_old_key, std::string{}));
+  } else {
+    FlushOldDataBlock();
+    if (r->old_block_flushed) {
+      r->old_index_metas.push_back(std::make_pair(r->last_old_key, std::string{}));
+    }
+  }
+  assert(rep_->old_data_buffers.size() == rep_->old_index_metas.size());
+  BlockHandle h;
+  for (size_t i = 0; i< rep_->old_data_buffers.size(); i++) {
+    const std::string& block_contents = rep_->old_data_buffers[i];
+    WriteBlock(block_contents, &h, BlockType::kData);
+    auto& p = rep_->old_index_metas[i];
+    std::cout << "last key, " << p.first << ", next_key " << p.second << std::endl;
+    std::string* last_key = &p.first;
+    Slice next_key = Slice(p.second.data(), p.second.size());
+    r->old_index_builder->AddIndexEntry(last_key, next_key.empty() ? nullptr: &next_key,
+                                        h);
+  }
+
+  // Write meta blocks, metaindex block and footer in the following order.
+  //    1. [meta block: filter]
+  //    2. [meta block: index]
+  //    3. [meta block: old_data_index]
+  //    4. [meta block: compression dictionary]
+  //    5. [meta block: range deletion tombstone]
+  //    6. [meta block: properties]
+  //    7. [metaindex block]
+  //    8. Footer
+  BlockHandle metaindex_block_handle, index_block_handle,
+      old_index_block_handle;
+  MetaIndexBuilder meta_index_builder;
+  WriteFilterBlock(&meta_index_builder);
+  WriteIndexBlock(&meta_index_builder, &index_block_handle,
+                  rep_->index_builder.get());
+  WriteIndexBlock(&meta_index_builder, &old_index_block_handle,
+                  rep_->old_index_builder.get());
+  WriteCompressionDictBlock(&meta_index_builder);
+  WriteCompressionDictBlock(&meta_index_builder);
+  WriteRangeDelBlock(&meta_index_builder);
+  WritePropertiesBlock(&meta_index_builder);
 
   return Status{};
 }
@@ -1003,7 +1311,7 @@ IOStatus SeparatedBlockBasedTableBuilder::io_status() const {
 
 void SeparatedBlockBasedTableBuilder::WriteRawBlock(
     const Slice& block_contents, CompressionType type, BlockHandle* handle,
-    BlockType block_type, const Slice* raw_block_contents, std::string* buffer,
+    BlockType block_type, const Slice* raw_block_contents,
     bool is_top_level_filter_block) {
   //  std::cout << block_contents.ToString(true) << std::endl;
   //  std::cout << "====================" << std::endl;
@@ -1013,19 +1321,13 @@ void SeparatedBlockBasedTableBuilder::WriteRawBlock(
   Status s = Status::OK();
   IOStatus io_s = IOStatus::OK();
   StopWatch sw(r->ioptions.clock, r->ioptions.stats, WRITE_RAW_BLOCK_MICROS);
-  handle->set_offset(r->get_offset(buffer == nullptr));
+  handle->set_offset(r->get_offset());
   handle->set_size(block_contents.size());
   assert(status().ok());
   assert(io_status().ok());
-  if (buffer == nullptr) {
-    std::cout << "new_handle, off " << handle->offset() << ", size "
-              << handle->size() << std::endl;
-    io_s = r->file->Append(block_contents);
-  } else {
-    std::cout << "old_handle, off " << handle->offset() << ", size "
-              << handle->size() << std::endl;
-    buffer->append(block_contents.data(), block_contents.size());
-  }
+  std::cout << "current_handle, off " << handle->offset() << ", size "
+            << handle->size() << std::endl;
+  io_s = r->file->Append(block_contents);
   if (io_s.ok()) {
     std::array<char, kBlockTrailerSize> trailer;
     trailer[0] = type;
@@ -1038,11 +1340,7 @@ void SeparatedBlockBasedTableBuilder::WriteRawBlock(
     TEST_SYNC_POINT_CALLBACK(
         "BlockBasedTableBuilder::WriteRawBlock:TamperWithChecksum",
         trailer.data());
-    if (buffer == nullptr) {
       io_s = r->file->Append(Slice(trailer.data(), trailer.size()));
-    } else {
-      buffer->append(trailer.data(), trailer.size());
-    }
     if (io_s.ok()) {
       assert(s.ok());
       bool warm_cache;
@@ -1080,9 +1378,8 @@ void SeparatedBlockBasedTableBuilder::WriteRawBlock(
       r->SetIOStatus(io_s);
     }
     if (s.ok() && io_s.ok()) {
-      r->set_offset(buffer == nullptr, r->get_offset(buffer == nullptr) +
-                                           block_contents.size() +
-                                           kBlockTrailerSize);
+      r->set_offset(r->get_offset() + block_contents.size() +
+                    kBlockTrailerSize);
       if (r->table_options.block_align && is_data_block) {
         size_t pad_bytes =
             (r->alignment - ((block_contents.size() + kBlockTrailerSize) &
@@ -1090,19 +1387,17 @@ void SeparatedBlockBasedTableBuilder::WriteRawBlock(
             (r->alignment - 1);
         io_s = r->file->Pad(pad_bytes);
         if (io_s.ok()) {
-          r->set_offset(buffer == nullptr,
-                        r->get_offset(buffer == nullptr) + pad_bytes);
+          r->set_offset(r->get_offset() + pad_bytes);
         } else {
           r->SetIOStatus(io_s);
         }
       }
       if (r->IsParallelCompressionEnabled()) {
         if (is_data_block) {
-          r->pc_rep->file_size_estimator.ReapBlock(
-              block_contents.size(), r->get_offset(buffer == nullptr));
+          r->pc_rep->file_size_estimator.ReapBlock(block_contents.size(),
+                                                   r->get_offset());
         } else {
-          r->pc_rep->file_size_estimator.SetEstimatedFileSize(
-              r->get_offset(buffer == nullptr));
+          r->pc_rep->file_size_estimator.SetEstimatedFileSize(r->get_offset());
         }
       }
     }

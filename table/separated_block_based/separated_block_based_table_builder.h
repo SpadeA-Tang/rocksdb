@@ -6,6 +6,8 @@
 #include "rocksdb/table.h"
 #include "table/block_based/block_builder.h"
 #include "table/block_based/block_type.h"
+#include "table/block_based/index_builder.h"
+#include "table/meta_blocks.h"
 #include "table/table_builder.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -63,13 +65,12 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
 
   struct ParallelCompressionRep;
 
-  void WriteBlock(BlockBuilder* block, BlockHandle* handle, BlockType blocktype,
-                  std::string* buffer);
+  void WriteBlock(BlockBuilder* block, BlockHandle* handle,
+                  BlockType blocktype);
   void WriteBlock(const Slice& block_contents, BlockHandle* handle,
-                  BlockType block_type, std::string* buffer);
+                  BlockType block_type);
   void WriteRawBlock(const Slice& data, CompressionType, BlockHandle* handle,
                      BlockType block_type, const Slice* raw_data = nullptr,
-                     std::string* buffer = nullptr,
                      bool is_top_level_filter_block = false);
 
   template <typename TBlocklike>
@@ -84,6 +85,16 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
   Status InsertBlockInCompressedCache(const Slice& block_contents,
                                       const CompressionType type,
                                       const BlockHandle* handle);
+
+  void WriteFilterBlock(MetaIndexBuilder* meta_index_builder);
+  void WriteIndexBlock(MetaIndexBuilder* meta_index_builder,
+                       BlockHandle* index_block_handle,
+                       IndexBuilder* index_builder);
+  void WritePropertiesBlock(MetaIndexBuilder* meta_index_builder);
+  void WriteCompressionDictBlock(MetaIndexBuilder* meta_index_builder);
+  void WriteRangeDelBlock(MetaIndexBuilder* meta_index_builder);
+  void WriteFooter(BlockHandle& metaindex_block_handle,
+                   BlockHandle& index_block_handle);
 
   void CompressAndVerifyBlock(const Slice& raw_block_contents,
                               bool is_data_block,
