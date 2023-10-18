@@ -81,6 +81,106 @@ class SeparatedBlockBasedTable : public TableReader {
       IndexBlockIter* input_iter, GetContext* get_context,
       BlockCacheLookupContext* lookup_context) const;
 
+  // Read block cache from block caches (if set): block_cache and
+  // block_cache_compressed.
+  // On success, Status::OK with be returned and @block will be populated with
+  // pointer to the block as well as its block handle.
+  // @param uncompression_dict Data for presetting the compression library's
+  //    dictionary.
+  template <typename TBlocklike>
+  Status GetDataBlockFromCache(const Slice& cache_key, Cache* block_cache,
+                               Cache* block_cache_compressed,
+                               const ReadOptions& read_options,
+                               CachableEntry<TBlocklike>* block,
+                               const UncompressionDict& uncompression_dict,
+                               BlockType block_type, const bool wait,
+                               GetContext* get_context) const;
+
+
+  static void SetupBaseCacheKey(const TableProperties* properties,
+                                const std::string& cur_db_session_id,
+                                uint64_t cur_file_number, uint64_t file_size,
+                                OffsetableCacheKey* out_base_cache_key,
+                                bool* out_is_stable = nullptr);
+
+  static CacheKey GetCacheKey(const OffsetableCacheKey& base_cache_key,
+                              const BlockHandle& handle);
+
+  static void UpdateCacheInsertionMetrics(BlockType block_type,
+                                          GetContext* get_context, size_t usage,
+                                          bool redundant,
+                                          Statistics* const statistics);
+
+  // Get the size to read from storage for a BlockHandle. size_t because we
+  // are about to load into memory.
+  static inline size_t BlockSizeWithTrailer(const BlockHandle& handle) {
+    return static_cast<size_t>(handle.size() + kBlockTrailerSize);
+  }
+
+  // It's the caller's responsibility to make sure that this is
+  // for raw block contents, which contains the compression
+  // byte in the end.
+  static inline CompressionType GetBlockCompressionType(const char* block_data,
+                                                        size_t block_size) {
+    return static_cast<CompressionType>(block_data[block_size]);
+  }
+  static inline CompressionType GetBlockCompressionType(
+      const BlockContents& contents) {
+    assert(contents.is_raw_block);
+    return GetBlockCompressionType(contents.data.data(), contents.data.size());
+  }
+
+  struct Rep;
+
+  Rep* get_rep() { return rep_; }
+  const Rep* get_rep() const { return rep_; }
+
+  // Similar to the above, with one crucial difference: it will retrieve the
+  // block from the file even if there are no caches configured (assuming the
+  // read options allow I/O).
+  template <typename TBlocklike>
+  Status RetrieveBlock(FilePrefetchBuffer* prefetch_buffer,
+                       const ReadOptions& ro, const BlockHandle& handle,
+                       const UncompressionDict& uncompression_dict,
+                       CachableEntry<TBlocklike>* block_entry,
+                       BlockType block_type, GetContext* get_context,
+                       BlockCacheLookupContext* lookup_context,
+                       bool for_compaction, bool use_cache,
+                       bool wait_for_cache) const;
+
+  template <typename TBlocklike>
+  Status MaybeReadBlockAndLoadToCache(
+      FilePrefetchBuffer* prefetch_buffer, const ReadOptions& ro,
+      const BlockHandle& handle, const UncompressionDict& uncompression_dict,
+      const bool wait, const bool for_compaction,
+      CachableEntry<TBlocklike>* block_entry, BlockType block_type,
+      GetContext* get_context, BlockCacheLookupContext* lookup_context,
+      BlockContents* contents) const;
+
+ protected:
+  Rep* rep_;
+  explicit SeparatedBlockBasedTable(Rep* rep, BlockCacheTracer* const block_cache_tracer)
+      : rep_(rep), block_cache_tracer_(block_cache_tracer) {}
+  // No copying allowed
+  explicit SeparatedBlockBasedTable(const TableReader&) = delete;
+  void operator=(const TableReader&) = delete;
+
+ private:
+  BlockCacheTracer* const block_cache_tracer_;
+
+  friend class TableCache;
+
+  // Create a index reader based on the index type stored in the table.
+  // Optionally, user can pass a preloaded meta_index_iter for the index that
+  // need to access extra meta blocks for index construction. This parameter
+  // helps avoid re-reading meta index block if caller already created one.
+  Status CreateIndexReader(const ReadOptions& ro,
+                           FilePrefetchBuffer* prefetch_buffer,
+                           InternalIterator* preloaded_meta_index_iter,
+                           bool use_cache, bool prefetch, bool pin,
+                           BlockCacheLookupContext* lookup_context,
+                           std::unique_ptr<BlockBasedTable::IndexReader>* index_reader, std::unique_ptr<BlockBasedTable::IndexReader>* old_index_reader);
+
   // If force_direct_prefetch is true, always prefetching to RocksDB
   //    buffer, rather than calling RandomAccessFile::Prefetch().
   static Status PrefetchTail(
@@ -107,41 +207,6 @@ class SeparatedBlockBasedTable : public TableReader {
       bool prefetch_all, const BlockBasedTableOptions& table_options,
       const int level, size_t file_size, size_t max_file_size_for_l0_meta_pin,
       BlockCacheLookupContext* lookup_context);
-
-  static void SetupBaseCacheKey(const TableProperties* properties,
-                                const std::string& cur_db_session_id,
-                                uint64_t cur_file_number, uint64_t file_size,
-                                OffsetableCacheKey* out_base_cache_key,
-                                bool* out_is_stable = nullptr);
-
-  struct Rep;
-
-  Rep* get_rep() { return rep_; }
-  const Rep* get_rep() const { return rep_; }
-
- protected:
-  Rep* rep_;
-  explicit SeparatedBlockBasedTable(Rep* rep, BlockCacheTracer* const block_cache_tracer)
-      : rep_(rep), block_cache_tracer_(block_cache_tracer) {}
-  // No copying allowed
-  explicit SeparatedBlockBasedTable(const TableReader&) = delete;
-  void operator=(const TableReader&) = delete;
-
- private:
-  BlockCacheTracer* const block_cache_tracer_;
-
-  friend class TableCache;
-
-  // Create a index reader based on the index type stored in the table.
-  // Optionally, user can pass a preloaded meta_index_iter for the index that
-  // need to access extra meta blocks for index construction. This parameter
-  // helps avoid re-reading meta index block if caller already created one.
-  Status CreateIndexReader(const ReadOptions& ro,
-                           FilePrefetchBuffer* prefetch_buffer,
-                           InternalIterator* preloaded_meta_index_iter,
-                           bool use_cache, bool prefetch, bool pin,
-                           BlockCacheLookupContext* lookup_context,
-                           std::unique_ptr<BlockBasedTable::IndexReader>* index_reader, std::unique_ptr<BlockBasedTable::IndexReader>* old_index_reader);
 };
 
 // Stores all the properties associated with a BlockBasedTable.
@@ -217,6 +282,16 @@ struct SeparatedBlockBasedTable::Rep {
   // the level when the table is opened, could potentially change when trivial
   // move is involved
   int level;
+
+  // If false, blocks in this file are definitely all uncompressed. Knowing this
+  // before reading individual blocks enables certain optimizations.
+  bool blocks_maybe_compressed = true;
+
+  // If true, data blocks in this file are definitely ZSTD compressed. If false
+  // they might not be. When false we skip creating a ZSTD digested
+  // uncompression dictionary. Even if we get a false negative, things should
+  // still work, just not as quickly.
+  bool blocks_definitely_zstd_compressed = false;
 
   const bool immortal_table;
 };

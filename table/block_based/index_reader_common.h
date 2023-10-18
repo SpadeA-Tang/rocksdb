@@ -9,8 +9,8 @@
 #pragma once
 
 #include "table/block_based/block_based_table_reader.h"
-
 #include "table/block_based/reader_common.h"
+#include "table/separated_block_based/separated_block_based_table_reader.h"
 
 namespace ROCKSDB_NAMESPACE {
 // Encapsulates common functionality for the various index reader
@@ -32,6 +32,14 @@ class BlockBasedTable::IndexReaderCommon : public BlockBasedTable::IndexReader {
                                GetContext* get_context,
                                BlockCacheLookupContext* lookup_context,
                                CachableEntry<Block>* index_block);
+
+  static Status ReadIndexBlock(const rocksdb::SeparatedBlockBasedTable* table,
+                               FilePrefetchBuffer* prefetch_buffer,
+                               const ReadOptions& read_options, bool use_cache,
+                               GetContext* get_context,
+                               BlockCacheLookupContext* lookup_context,
+                               CachableEntry<Block>* index_block,
+                               CachableEntry<Block>* old_index_block);
 
   const BlockBasedTable* table() const { return table_; }
 

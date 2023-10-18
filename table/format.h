@@ -155,6 +155,8 @@ class Footer {
   // Block handle for (top-level) index block.
   const BlockHandle& index_handle() const { return index_handle_; }
 
+  const BlockHandle& old_index_handle() const { return old_index_handle_; }
+
   // Checksum type used in the file.
   ChecksumType checksum_type() const {
     return static_cast<ChecksumType>(checksum_type_);

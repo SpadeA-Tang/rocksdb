@@ -109,9 +109,6 @@ void IndexValue::EncodeTo(std::string* dst, bool have_first_key,
                           const BlockHandle* previous_handle) const {
   if (previous_handle) {
     // WART: this is specific to Block-based table
-    uint64_t h_off = handle.offset();
-    uint64_t should = previous_handle->offset() + previous_handle->size() +
-                      BlockBasedTable::kBlockTrailerSize;
     assert(handle.offset() == previous_handle->offset() +
                                   previous_handle->size() +
                                   BlockBasedTable::kBlockTrailerSize);
