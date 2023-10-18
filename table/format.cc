@@ -215,12 +215,13 @@ inline uint8_t BlockTrailerSizeForMagicNumber(uint64_t magic_number) {
 //      newer magic number (8 bytes)
 
 constexpr size_t kFooterPart2Size = 2 * BlockHandle::kMaxEncodedLength;
+constexpr size_t kFooterPart3Size = 3 * BlockHandle::kMaxEncodedLength;
 }  // namespace
 
 void FooterBuilder::Build(uint64_t magic_number, uint32_t format_version,
                           uint64_t footer_offset, ChecksumType checksum_type,
                           const BlockHandle& metaindex_handle,
-                          const BlockHandle& index_handle) {
+                          const BlockHandle& index_handle, const BlockHandle* old_index_handle) {
   (void)footer_offset;  // Future use
 
   assert(magic_number != Footer::kNullTableMagicNumber);
@@ -237,7 +238,7 @@ void FooterBuilder::Build(uint64_t magic_number, uint32_t format_version,
     // Part 2
     part2 = cur;
     // Skip over part 2 for now
-    cur += kFooterPart2Size;
+    cur += old_index_handle == nullptr ? kFooterPart2Size : kFooterPart3Size;
     // Part 3
     part3 = cur;
     EncodeFixed32(cur, format_version);
@@ -250,7 +251,7 @@ void FooterBuilder::Build(uint64_t magic_number, uint32_t format_version,
     assert(checksum_type == kNoChecksum || checksum_type == kCRC32c);
     // Generate part 3 (part 1 empty, skip part 2 for now)
     part2 = data_.data();
-    part3 = part2 + kFooterPart2Size;
+    part3 = part2 + (old_index_handle == nullptr ? kFooterPart2Size : kFooterPart3Size);
     char* cur = part3;
     // Use legacy magic numbers to indicate format_version=0, for
     // compatibility. No other cases should use format_version=0.
@@ -262,6 +263,9 @@ void FooterBuilder::Build(uint64_t magic_number, uint32_t format_version,
     char* cur = part2;
     cur = metaindex_handle.EncodeTo(cur);
     cur = index_handle.EncodeTo(cur);
+    if (old_index_handle != nullptr) {
+      cur = old_index_handle->EncodeTo(cur);
+    }
     // Zero pad remainder
     std::fill(cur, part3, char{0});
   }

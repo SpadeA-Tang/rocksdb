@@ -1180,7 +1180,8 @@ void SeparatedBlockBasedTableBuilder::WriteRangeDelBlock(
     MetaIndexBuilder* meta_index_builder) {}
 
 void SeparatedBlockBasedTableBuilder::WriteFooter(
-    BlockHandle& metaindex_block_handle, BlockHandle& index_block_handle) {
+    BlockHandle& metaindex_block_handle, BlockHandle& index_block_handle,
+    BlockHandle& oldindex_block_handle) {
   Rep* r = rep_;
   // this is guaranteed by BlockBasedTableBuilder's constructor
   assert(r->table_options.checksum == kCRC32c ||
@@ -1212,11 +1213,11 @@ Status SeparatedBlockBasedTableBuilder::Finish() {
   }
 
   if (r->old_block_flushed) {
-    r->old_index_metas.push_back(std::make_pair(r->last_old_key, std::string{}));
+    r->old_index_metas.emplace_back(r->last_old_key, std::string{});
   } else {
     FlushOldDataBlock();
     if (r->old_block_flushed) {
-      r->old_index_metas.push_back(std::make_pair(r->last_old_key, std::string{}));
+      r->old_index_metas.emplace_back(r->last_old_key, std::string{});
     }
   }
   assert(rep_->old_data_buffers.size() == rep_->old_index_metas.size());
@@ -1230,6 +1231,7 @@ Status SeparatedBlockBasedTableBuilder::Finish() {
     Slice next_key = Slice(p.second.data(), p.second.size());
     r->old_index_builder->AddIndexEntry(last_key, next_key.empty() ? nullptr: &next_key,
                                         h);
+    r->pending_handle = h;
   }
 
   // Write meta blocks, metaindex block and footer in the following order.
@@ -1250,10 +1252,19 @@ Status SeparatedBlockBasedTableBuilder::Finish() {
   WriteIndexBlock(&meta_index_builder, &old_index_block_handle,
                   rep_->old_index_builder.get());
   WriteCompressionDictBlock(&meta_index_builder);
-  WriteCompressionDictBlock(&meta_index_builder);
   WriteRangeDelBlock(&meta_index_builder);
   WritePropertiesBlock(&meta_index_builder);
-
+  if (ok()) {
+    // flush the meta index block
+    WriteRawBlock(meta_index_builder.Finish(), kNoCompression,
+                  &metaindex_block_handle, BlockType::kMetaIndex);
+  }
+  if (ok()) {
+    WriteFooter(metaindex_block_handle, index_block_handle,
+                old_index_block_handle);
+  }
+  assert(r->get_offset() == r->file->GetFileSize());
+  r->state = Rep::State::kClosed;
   return Status{};
 }
 

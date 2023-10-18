@@ -94,7 +94,7 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
   void WriteCompressionDictBlock(MetaIndexBuilder* meta_index_builder);
   void WriteRangeDelBlock(MetaIndexBuilder* meta_index_builder);
   void WriteFooter(BlockHandle& metaindex_block_handle,
-                   BlockHandle& index_block_handle);
+                   BlockHandle& index_block_handle, BlockHandle& oldindex_block_handle);
 
   void CompressAndVerifyBlock(const Slice& raw_block_contents,
                               bool is_data_block,

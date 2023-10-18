@@ -220,7 +220,7 @@ class FooterBuilder {
   void Build(uint64_t table_magic_number, uint32_t format_version,
              uint64_t footer_offset, ChecksumType checksum_type,
              const BlockHandle& metaindex_handle,
-             const BlockHandle& index_handle = BlockHandle::NullBlockHandle());
+             const BlockHandle& index_handle = BlockHandle::NullBlockHandle(), const BlockHandle* old_index_handle = nullptr);
 
   // After Builder, get a Slice for the serialized Footer, backed by this
   // FooterBuilder.
