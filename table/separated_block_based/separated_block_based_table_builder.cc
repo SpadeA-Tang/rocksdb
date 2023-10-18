@@ -35,7 +35,7 @@
 #include "table/block_based/partitioned_filter_block.h"
 #include "table/format.h"
 #include "table/meta_blocks.h"
-#include "table/separated_block_based/separated_block_based_reader.h"
+#include "table/separated_block_based/separated_block_based_table_reader.h"
 #include "table/table_builder.h"
 #include "util/coding.h"
 #include "util/compression.h"
@@ -1181,7 +1181,7 @@ void SeparatedBlockBasedTableBuilder::WriteRangeDelBlock(
 
 void SeparatedBlockBasedTableBuilder::WriteFooter(
     BlockHandle& metaindex_block_handle, BlockHandle& index_block_handle,
-    BlockHandle& oldindex_block_handle) {
+    BlockHandle& old_index_block_handle) {
   Rep* r = rep_;
   // this is guaranteed by BlockBasedTableBuilder's constructor
   assert(r->table_options.checksum == kCRC32c ||
@@ -1191,7 +1191,8 @@ void SeparatedBlockBasedTableBuilder::WriteFooter(
   FooterBuilder footer;
   footer.Build(kBlockBasedTableMagicNumber, r->table_options.format_version,
                r->get_offset(), r->table_options.checksum,
-               metaindex_block_handle, index_block_handle);
+               metaindex_block_handle, index_block_handle,
+               &old_index_block_handle);
   IOStatus ios = r->file->Append(footer.GetSlice());
   if (ios.ok()) {
     r->set_offset(r->get_offset() + footer.GetSlice().size());

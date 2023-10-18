@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #pragma once
 #include "table/block_based/index_reader_common.h"
+#include "table/separated_block_based/separated_block_based_table_reader.h"
 
 namespace ROCKSDB_NAMESPACE {
 // Index that allows binary search lookup for the first key of each block.
@@ -24,6 +25,13 @@ class BinarySearchIndexReader : public BlockBasedTable::IndexReaderCommon {
                        bool prefetch, bool pin,
                        BlockCacheLookupContext* lookup_context,
                        std::unique_ptr<IndexReader>* index_reader);
+
+  static Status Create(const rocksdb::SeparatedBlockBasedTable* table,
+                const ReadOptions& ro, FilePrefetchBuffer* prefetch_buffer,
+                bool use_cache, bool prefetch, bool pin,
+                BlockCacheLookupContext* lookup_context,
+                std::unique_ptr<IndexReader>* index_reader,
+                std::unique_ptr<IndexReader>* old_index_reader);
 
   InternalIteratorBase<IndexValue>* NewIterator(
       const ReadOptions& read_options, bool /* disable_prefix_seek */,

@@ -182,7 +182,7 @@ class Footer {
   // padding (to maximum handle encoding size), a format version number, and a
   // magic number.
   static constexpr uint32_t kNewVersionsEncodedLength =
-      1 + 2 * BlockHandle::kMaxEncodedLength + 4 + kMagicNumberLengthByte;
+      1 + 3 * BlockHandle::kMaxEncodedLength + 4 + kMagicNumberLengthByte;
   static constexpr uint32_t kMaxEncodedLength = kNewVersionsEncodedLength;
 
   static constexpr uint64_t kNullTableMagicNumber = 0;
@@ -197,6 +197,7 @@ class Footer {
   uint32_t format_version_ = kInvalidFormatVersion;
   BlockHandle metaindex_handle_;
   BlockHandle index_handle_;
+  BlockHandle old_index_handle_;
   int checksum_type_ = kInvalidChecksumType;
   uint8_t block_trailer_size_ = 0;
 };

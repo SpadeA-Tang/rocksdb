@@ -8,8 +8,8 @@
 #include "separated_block_based_table_factory.h"
 #include "table/block_based/partitioned_index_iterator.h"
 #include "table/format.h"
-#include "table/separated_block_based/separated_block_based_reader.h"
 #include "table/separated_block_based/separated_block_based_table_builder.h"
+#include "table/separated_block_based/separated_block_based_table_reader.h"
 #include "test_util/testharness.h"
 #include "test_util/testutil.h"
 #include "util/random.h"
@@ -72,6 +72,28 @@ class SeparatedBlockTest
     ASSERT_OK(table_builder->Finish());
   }
 
+  void NewSeparatedBlockBasedTableReader(
+      const FileOptions& foptions, const ImmutableOptions& ioptions,
+      const InternalKeyComparator& comparator, const std::string& table_name,
+      std::unique_ptr<BlockBasedTable>* table) {
+    std::unique_ptr<RandomAccessFileReader> file;
+    NewFileReader(table_name, foptions, &file);
+
+    uint64_t file_size = 0;
+    ASSERT_OK(env_->GetFileSize(Path(table_name), &file_size));
+
+    std::unique_ptr<TableReader> table_reader;
+    ReadOptions ro;
+    const auto* table_options =
+        table_factory_->GetOptions<BlockBasedTableOptions>();
+    ASSERT_NE(table_options, nullptr);
+    ASSERT_OK(SeparatedBlockBasedTable::Open(
+        ro, ioptions, EnvOptions(), *table_options, comparator, std::move(file),
+        file_size, &table_reader));
+
+    table->reset(reinterpret_cast<BlockBasedTable*>(table_reader.release()));
+  }
+
   std::string Path(const std::string& fname) { return test_dir_ + "/" + fname; }
 
  private:
@@ -88,6 +110,15 @@ class SeparatedBlockTest
     std::unique_ptr<FSWritableFile> file;
     ASSERT_OK(fs_->NewWritableFile(path, foptions, &file, nullptr));
     writer->reset(new WritableFileWriter(std::move(file), path, env_options));
+  }
+
+  void NewFileReader(const std::string& filename, const FileOptions& opt,
+                     std::unique_ptr<RandomAccessFileReader>* reader) {
+    std::string path = Path(filename);
+    std::unique_ptr<FSRandomAccessFile> f;
+    ASSERT_OK(fs_->NewRandomAccessFile(path, opt, &f, nullptr));
+    reader->reset(new RandomAccessFileReader(std::move(f), path,
+                                             env_->GetSystemClock().get()));
   }
 
   static std::string ToInternalKey(const std::string& key, SequenceNumber s) {
@@ -117,6 +148,14 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   }
 
   CreateTable("test", CompressionType::kNoCompression, kv);
+  std::unique_ptr<BlockBasedTable> table;
+  Options options;
+  ImmutableOptions ioptions(options);
+  FileOptions foptions;
+  foptions.use_direct_reads = use_direct_reads_;
+  InternalKeyComparator comparator(options.comparator);
+  NewSeparatedBlockBasedTableReader(foptions, ioptions, comparator, "test",
+                                    &table);
 }
 
 }  // namespace ROCKSDB_NAMESPACE

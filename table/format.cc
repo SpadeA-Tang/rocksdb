@@ -328,6 +328,9 @@ Status Footer::DecodeFrom(Slice input, uint64_t input_offset) {
   if (result.ok()) {
     result = index_handle_.DecodeFrom(&input);
   }
+  if (result.ok()) {
+    result = old_index_handle_.DecodeFrom(&input);
+  }
   return result;
   // Padding in part2 is ignored
 }
