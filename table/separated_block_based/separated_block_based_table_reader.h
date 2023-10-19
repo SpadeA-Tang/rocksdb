@@ -73,11 +73,10 @@ class SeparatedBlockBasedTable : public TableReader {
 
   size_t ApproximateMemoryUsage() const override;
 
-
   InternalIteratorBase<IndexValue>* NewIndexIterator(
       const ReadOptions& read_options, bool need_upper_bound_check,
       IndexBlockIter* input_iter, GetContext* get_context,
-      BlockCacheLookupContext* lookup_context) const;
+      BlockCacheLookupContext* lookup_context, bool) const;
 
   // Similar to the above, with one crucial difference: it will retrieve the
   // block from the file even if there are no caches configured (assuming the
@@ -207,6 +206,8 @@ class SeparatedBlockBasedTable : public TableReader {
       bool prefetch_all, const BlockBasedTableOptions& table_options,
       const int level, size_t file_size, size_t max_file_size_for_l0_meta_pin,
       BlockCacheLookupContext* lookup_context);
+
+  bool PrefixExtractorChanged(const SliceTransform* prefix_extractor) const;
 };
 
 // Stores all the properties associated with a BlockBasedTable.

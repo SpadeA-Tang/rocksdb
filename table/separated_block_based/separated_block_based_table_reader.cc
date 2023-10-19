@@ -336,10 +336,43 @@ Status SeparatedBlockBasedTable::PrefetchTail(
   return s;
 }
 
+bool SeparatedBlockBasedTable::PrefixExtractorChanged(
+    const SliceTransform* prefix_extractor) const {
+  if (prefix_extractor == nullptr) {
+    return true;
+  } else if (prefix_extractor == rep_->table_prefix_extractor.get()) {
+    return false;
+  } else {
+    assert(false);
+    //    return PrefixExtractorChangedHelper(rep_->table_properties.get(),
+    //                                        prefix_extractor);
+  }
+}
+
 InternalIterator* SeparatedBlockBasedTable::NewIterator(
-    const ReadOptions&, const SliceTransform* prefix_extractor, Arena* arena,
-    bool skip_filters, TableReaderCaller caller,
+    const ReadOptions& read_options, const SliceTransform* prefix_extractor,
+    Arena* arena, bool skip_filters, TableReaderCaller caller,
     size_t compaction_readahead_size, bool allow_unprepared_value) {
+  BlockCacheLookupContext lookup_context{caller};
+  bool need_upper_bound_check =
+      read_options.auto_prefix_mode || PrefixExtractorChanged(prefix_extractor);
+  std::unique_ptr<InternalIteratorBase<IndexValue>> index_iter(NewIndexIterator(
+      read_options,
+      need_upper_bound_check &&
+          rep_->index_type == BlockBasedTableOptions::kHashSearch,
+      nullptr, nullptr, &lookup_context, false));
+
+  std::unique_ptr<InternalIteratorBase<IndexValue>> old_index_iter(
+      NewIndexIterator(
+          read_options,
+          need_upper_bound_check &&
+              rep_->index_type == BlockBasedTableOptions::kHashSearch,
+          nullptr, nullptr, &lookup_context, true));
+
+  if (arena == nullptr) {
+  } else {
+  }
+
   return nullptr;
 }
 
@@ -371,10 +404,21 @@ SeparatedBlockBasedTable::GetTableProperties() const {
 size_t SeparatedBlockBasedTable::ApproximateMemoryUsage() const { return 0; }
 
 InternalIteratorBase<IndexValue>* SeparatedBlockBasedTable::NewIndexIterator(
-    const ReadOptions& read_options, bool need_upper_bound_check,
+    const ReadOptions& read_options, bool disable_prefix_seek,
     IndexBlockIter* input_iter, GetContext* get_context,
-    BlockCacheLookupContext* lookup_context) const {
-  return nullptr;
+    BlockCacheLookupContext* lookup_context, bool old_data_block) const {
+  assert(rep_ != nullptr);
+  assert(rep_->index_reader != nullptr);
+
+  if (!old_data_block) {
+    return rep_->index_reader->NewIterator(read_options, disable_prefix_seek,
+                                           input_iter, get_context,
+                                           lookup_context);
+  } else {
+    return rep_->old_index_reader->NewIterator(read_options,
+                                               disable_prefix_seek, input_iter,
+                                               get_context, lookup_context);
+  }
 }
 
 // Load the meta-index-block from the file. On success, return the loaded
@@ -384,6 +428,27 @@ Status SeparatedBlockBasedTable::ReadMetaIndexBlock(
     const ReadOptions& ro, FilePrefetchBuffer* prefetch_buffer,
     std::unique_ptr<Block>* metaindex_block,
     std::unique_ptr<InternalIterator>* iter) {
+  std::unique_ptr<Block> metaindex;
+  Status s = ReadBlockFromFile(
+      rep_->file.get(), prefetch_buffer, rep_->footer, ro,
+      rep_->footer.metaindex_handle(), &metaindex, rep_->ioptions,
+      true /* decompress */, true /*maybe_compressed*/, BlockType::kMetaIndex,
+      UncompressionDict::GetEmptyDict(), rep_->persistent_cache_options,
+      0 /* read_amp_bytes_per_bit */, GetMemoryAllocator(rep_->table_options),
+      false /* for_compaction */, rep_->blocks_definitely_zstd_compressed,
+      nullptr /* filter_policy */);
+
+  if (!s.ok()) {
+    ROCKS_LOG_ERROR(rep_->ioptions.logger,
+                    "Encountered error while reading data from properties"
+                    " block %s",
+                    s.ToString().c_str());
+    return s;
+  }
+
+  *metaindex_block = std::move(metaindex);
+  // meta block uses bytewise comparator.
+  iter->reset(metaindex_block->get()->NewMetaIterator());
   return Status::OK();
 }
 
@@ -494,8 +559,8 @@ Status SeparatedBlockBasedTable::PrefetchIndexAndFilterBlocks(
   // are hence follow the configuration for pin and prefetch regardless of
   // the value of cache_index_and_filter_blocks
   if (prefetch_all || pin_partition) {
-    assert(false);
     s = rep_->index_reader->CacheDependencies(ro, pin_partition);
+    s = rep_->old_index_reader->CacheDependencies(ro, pin_partition);
   }
   if (!s.ok()) {
     return s;

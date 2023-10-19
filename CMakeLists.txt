@@ -821,6 +821,7 @@ set(SOURCES
         table/separated_block_based/separated_block_based_table_test.cc
         table/separated_block_based/binary_search_index_reader.cc
         table/separated_block_based/index_reader_common.cc
+        table/separated_block_based/separated_block_based_table_iterator.cc
         table/block_fetcher.cc
         table/cuckoo/cuckoo_table_builder.cc
         table/cuckoo/cuckoo_table_factory.cc

@@ -156,6 +156,19 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   InternalKeyComparator comparator(options.comparator);
   NewSeparatedBlockBasedTableReader(foptions, ioptions, comparator, "test",
                                     &table);
+  ReadOptions read_options;
+  const MutableCFOptions moptions(options);
+  std::unique_ptr<InternalIterator> index_iter(
+      table->NewIterator(read_options, moptions.prefix_extractor.get(), nullptr,
+                         false, TableReaderCaller::kUncategorized));
+  index_iter->Seek("");
+  while (index_iter->Valid()) {
+    Slice k(index_iter->key());
+    Slice value(index_iter->value());
+    std::cout << "key " << k.ToString() << ", value " << value.ToString()
+              << std::endl;
+    index_iter->Next();
+  }
 }
 
 }  // namespace ROCKSDB_NAMESPACE

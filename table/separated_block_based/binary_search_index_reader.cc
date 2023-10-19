@@ -33,6 +33,9 @@ Status SeparatedBinarySearchIndexReader::Create(
   index_reader->reset(
       new SeparatedBinarySearchIndexReader(table, std::move(index_block)));
 
+  old_index_reader->reset(
+      new SeparatedBinarySearchIndexReader(table, std::move(old_index_block)));
+
   return Status::OK();
 }
 
