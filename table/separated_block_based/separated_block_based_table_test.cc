@@ -75,7 +75,7 @@ class SeparatedBlockTest
   void NewSeparatedBlockBasedTableReader(
       const FileOptions& foptions, const ImmutableOptions& ioptions,
       const InternalKeyComparator& comparator, const std::string& table_name,
-      std::unique_ptr<BlockBasedTable>* table) {
+      std::unique_ptr<SeparatedBlockBasedTable>* table) {
     std::unique_ptr<RandomAccessFileReader> file;
     NewFileReader(table_name, foptions, &file);
 
@@ -91,7 +91,7 @@ class SeparatedBlockTest
         ro, ioptions, EnvOptions(), *table_options, comparator, std::move(file),
         file_size, &table_reader));
 
-    table->reset(reinterpret_cast<BlockBasedTable*>(table_reader.release()));
+    table->reset(reinterpret_cast<SeparatedBlockBasedTable*>(table_reader.release()));
   }
 
   std::string Path(const std::string& fname) { return test_dir_ + "/" + fname; }
@@ -148,7 +148,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   }
 
   CreateTable("test", CompressionType::kNoCompression, kv);
-  std::unique_ptr<BlockBasedTable> table;
+  std::unique_ptr<SeparatedBlockBasedTable> table;
   Options options;
   ImmutableOptions ioptions(options);
   FileOptions foptions;
