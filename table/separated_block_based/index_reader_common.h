@@ -10,29 +10,31 @@
 
 #include "table/block_based/block_based_table_reader.h"
 #include "table/block_based/reader_common.h"
+#include "table/separated_block_based/separated_block_based_table_reader.h"
 
 namespace ROCKSDB_NAMESPACE {
 // Encapsulates common functionality for the various index reader
 // implementations. Provides access to the index block regardless of whether
 // it is owned by the reader or stored in the cache, or whether it is pinned
 // in the cache or not.
-class BlockBasedTable::IndexReaderCommon : public BlockBasedTable::IndexReader {
+class SeparatedBlockBasedTable::IndexReaderCommon : public BlockBasedTable::IndexReader {
  public:
-  IndexReaderCommon(const BlockBasedTable* t,
+  IndexReaderCommon(const SeparatedBlockBasedTable* t,
                     CachableEntry<Block>&& index_block)
       : table_(t), index_block_(std::move(index_block)) {
     assert(table_ != nullptr);
   }
 
  protected:
-  static Status ReadIndexBlock(const BlockBasedTable* table,
+  static Status ReadIndexBlock(const rocksdb::SeparatedBlockBasedTable* table,
                                FilePrefetchBuffer* prefetch_buffer,
                                const ReadOptions& read_options, bool use_cache,
                                GetContext* get_context,
                                BlockCacheLookupContext* lookup_context,
-                               CachableEntry<Block>* index_block);
+                               CachableEntry<Block>* index_block,
+                               CachableEntry<Block>* old_index_block);
 
-  const BlockBasedTable* table() const { return table_; }
+  const SeparatedBlockBasedTable* table() const { return table_; }
 
   const InternalKeyComparator* internal_comparator() const {
     assert(table_ != nullptr);
@@ -77,7 +79,7 @@ class BlockBasedTable::IndexReaderCommon : public BlockBasedTable::IndexReader {
   }
 
  private:
-  const BlockBasedTable* table_;
+  const SeparatedBlockBasedTable* table_;
   CachableEntry<Block> index_block_;
 };
 

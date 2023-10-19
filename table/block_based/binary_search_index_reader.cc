@@ -8,8 +8,6 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include "table/block_based/binary_search_index_reader.h"
 
-#include "table/separated_block_based/separated_block_based_table_reader.h"
-
 namespace ROCKSDB_NAMESPACE {
 Status BinarySearchIndexReader::Create(
     const BlockBasedTable* table, const ReadOptions& ro,
@@ -39,35 +37,6 @@ Status BinarySearchIndexReader::Create(
       new BinarySearchIndexReader(table, std::move(index_block)));
 
   return Status::OK();
-}
-
-Status BinarySearchIndexReader::Create(
-    const SeparatedBlockBasedTable* table, const ReadOptions& ro,
-    FilePrefetchBuffer* prefetch_buffer, bool use_cache, bool prefetch,
-    bool pin, BlockCacheLookupContext* lookup_context,
-    std::unique_ptr<IndexReader>* index_reader, std::unique_ptr<IndexReader>* old_index_reader) {
-  assert(table != nullptr);
-  assert(table->get_rep());
-  assert(!pin || prefetch);
-  assert(index_reader != nullptr);
-  assert(old_index_reader != nullptr);
-
-  CachableEntry<Block> index_block;
-  CachableEntry<Block> old_index_block;
-  if (prefetch || !use_cache) {
-    const Status s = ReadIndexBlock(table, prefetch_buffer, ro, use_cache,
-                                    /*get_context=*/nullptr, lookup_context,
-                                    &index_block, &old_index_block);
-    if (!s.ok()) {
-      return s;
-    }
-
-    if (use_cache && !pin) {
-      index_block.Reset();
-    }
-  }
-
-  index_reader->reset(new BinarySearchIndexReader(table, std::move(index_block)));
 }
 
 InternalIteratorBase<IndexValue>* BinarySearchIndexReader::NewIterator(

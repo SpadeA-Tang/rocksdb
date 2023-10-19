@@ -1,7 +1,5 @@
 #pragma once
 
-#pragma once
-
 #include <cstdint>
 
 #include "cache/cache_key.h"
@@ -81,6 +79,19 @@ class SeparatedBlockBasedTable : public TableReader {
       IndexBlockIter* input_iter, GetContext* get_context,
       BlockCacheLookupContext* lookup_context) const;
 
+  // Similar to the above, with one crucial difference: it will retrieve the
+  // block from the file even if there are no caches configured (assuming the
+  // read options allow I/O).
+  template <typename TBlocklike>
+  Status RetrieveBlock(FilePrefetchBuffer* prefetch_buffer,
+                       const ReadOptions& ro, const BlockHandle& handle,
+                       const UncompressionDict& uncompression_dict,
+                       CachableEntry<TBlocklike>* block_entry,
+                       BlockType block_type, GetContext* get_context,
+                       BlockCacheLookupContext* lookup_context,
+                       bool for_compaction, bool use_cache,
+                       bool wait_for_cache) const;
+
   // Read block cache from block caches (if set): block_cache and
   // block_cache_compressed.
   // On success, Status::OK with be returned and @block will be populated with
@@ -135,19 +146,6 @@ class SeparatedBlockBasedTable : public TableReader {
   Rep* get_rep() { return rep_; }
   const Rep* get_rep() const { return rep_; }
 
-  // Similar to the above, with one crucial difference: it will retrieve the
-  // block from the file even if there are no caches configured (assuming the
-  // read options allow I/O).
-  template <typename TBlocklike>
-  Status RetrieveBlock(FilePrefetchBuffer* prefetch_buffer,
-                       const ReadOptions& ro, const BlockHandle& handle,
-                       const UncompressionDict& uncompression_dict,
-                       CachableEntry<TBlocklike>* block_entry,
-                       BlockType block_type, GetContext* get_context,
-                       BlockCacheLookupContext* lookup_context,
-                       bool for_compaction, bool use_cache,
-                       bool wait_for_cache) const;
-
   template <typename TBlocklike>
   Status MaybeReadBlockAndLoadToCache(
       FilePrefetchBuffer* prefetch_buffer, const ReadOptions& ro,
@@ -156,6 +154,8 @@ class SeparatedBlockBasedTable : public TableReader {
       CachableEntry<TBlocklike>* block_entry, BlockType block_type,
       GetContext* get_context, BlockCacheLookupContext* lookup_context,
       BlockContents* contents) const;
+
+  class IndexReaderCommon;
 
  protected:
   Rep* rep_;
@@ -245,6 +245,7 @@ struct SeparatedBlockBasedTable::Rep {
   Footer footer;
 
   std::unique_ptr<BlockBasedTable::IndexReader> index_reader;
+  std::unique_ptr<BlockBasedTable::IndexReader> old_index_reader;
   std::unique_ptr<FilterBlockReader> filter;
   std::unique_ptr<UncompressionDictReader> uncompression_dict_reader;
 
@@ -292,6 +293,11 @@ struct SeparatedBlockBasedTable::Rep {
   // uncompression dictionary. Even if we get a false negative, things should
   // still work, just not as quickly.
   bool blocks_definitely_zstd_compressed = false;
+
+  // These describe how index is encoded.
+  bool index_has_first_key = false;
+  bool index_key_includes_seq = true;
+  bool index_value_is_full = true;
 
   const bool immortal_table;
 };
