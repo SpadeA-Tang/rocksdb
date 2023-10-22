@@ -161,7 +161,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   std::unique_ptr<InternalIterator> index_iter(
       table->NewIterator(read_options, moptions.prefix_extractor.get(), nullptr,
                          false, TableReaderCaller::kUncategorized));
-  index_iter->Seek("");
+  index_iter->SeekToFirst();
   while (index_iter->Valid()) {
     Slice k(index_iter->key());
     Slice value(index_iter->value());

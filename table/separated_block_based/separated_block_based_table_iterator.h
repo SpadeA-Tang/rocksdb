@@ -1,16 +1,16 @@
 #pragma once
 #include "table/block_based/block_based_table_reader.h"
-#include "table/block_based/block_based_table_reader_impl.h"
 #include "table/block_based/block_prefetcher.h"
 #include "table/block_based/reader_common.h"
 #include "table/separated_block_based/separated_block_based_table_reader.h"
+#include "table/separated_block_based/separated_block_based_table_reader_impl.h"
 
 namespace ROCKSDB_NAMESPACE {
 class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
  public:
   SeparatedBlockBasedTableIterator(
       const SeparatedBlockBasedTable* table, const ReadOptions& read_options,
-      bool latest_only, const InternalKeyComparator& icomp,
+      const InternalKeyComparator& icomp,
       std::unique_ptr<InternalIteratorBase<IndexValue>>&& index_iter,
       std::unique_ptr<InternalIteratorBase<IndexValue>>&& old_index_iter,
       bool check_filter, bool need_upper_bound_check,
@@ -18,7 +18,7 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
       size_t compaction_readahead_size = 0, bool allow_unprepared_value = false)
       : index_iter_(std::move(index_iter)),
         old_index_iter_(std::move(old_index_iter)),
-        latest_only(latest_only),
+        iter_state_(IterState::NewVersion),
         table_(table),
         read_options_(read_options),
         icomp_(icomp),
@@ -53,11 +53,26 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
   }
 
   bool Valid() const override {
-    return !is_out_of_bound_ &&
-           (is_at_first_key_from_index_ ||
-            (block_iter_points_to_real_block_ && block_iter_.Valid()));
+    if (iter_state_ == IterState::NewVersion) {
+      return !is_out_of_bound_ &&
+             (is_at_first_key_from_index_ ||
+              (block_iter_points_to_real_block_ && block_iter_.Valid()));
+    } else {
+      return !is_old_out_of_bound_ &&
+             (is_old_at_first_key_from_index_ ||
+              (old_block_iter_points_to_real_block_ && old_block_iter_.Valid()));
+    }
   }
+
   Slice key() const override {
+    if (iter_state_ == IterState::NewVersion) {
+      return key_impl();
+    } else {
+      return old_key_impl();
+    }
+  }
+
+  Slice key_impl() const{
     assert(Valid());
     if (is_at_first_key_from_index_) {
       return index_iter_->value().first_internal_key;
@@ -65,7 +80,25 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
       return block_iter_.key();
     }
   }
+
+  Slice old_key_impl() const{
+    assert(Valid());
+    if (is_old_at_first_key_from_index_) {
+      return old_index_iter_->value().first_internal_key;
+    } else {
+      return old_block_iter_.key();
+    }
+  }
+
   Slice user_key() const override {
+    if (iter_state_ == IterState::NewVersion) {
+      return user_key_impl();
+    } else {
+      return user_old_key_impl();
+    }
+  }
+
+  Slice user_key_impl() const {
     assert(Valid());
     if (is_at_first_key_from_index_) {
       return ExtractUserKey(index_iter_->value().first_internal_key);
@@ -73,6 +106,16 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
       return block_iter_.user_key();
     }
   }
+
+  Slice user_old_key_impl() const {
+    assert(Valid());
+    if (is_old_at_first_key_from_index_) {
+      return ExtractUserKey(old_index_iter_->value().first_internal_key);
+    } else {
+      return old_block_iter_.user_key();
+    }
+  }
+
   bool PrepareValue() override {
     assert(Valid());
 
@@ -82,6 +125,60 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
 
     return const_cast<SeparatedBlockBasedTableIterator*>(this)
         ->MaterializeCurrentBlock();
+  }
+
+  Slice value() const override {
+    if (iter_state_ == IterState::NewVersion) {
+      return value_impl();
+    } else {
+      return old_value_impl();
+    }
+  }
+
+  Slice value_impl() const  {
+    // PrepareValue() must have been called.
+    assert(!is_at_first_key_from_index_);
+    assert(Valid());
+
+    return block_iter_.value();
+  }
+
+  Slice old_value_impl() const  {
+    // PrepareValue() must have been called.
+    assert(!is_old_at_first_key_from_index_);
+    assert(Valid());
+
+    return old_block_iter_.value();
+  }
+
+  Status status() const override {
+    if (iter_state_ == IterState::NewVersion) {
+      return status_impl();
+    } else {
+      return old_status_impl();
+    }
+  }
+
+  Status status_impl() const {
+    // Prefix index set status to NotFound when the prefix does not exist
+    if (!index_iter_->status().ok() && !index_iter_->status().IsNotFound()) {
+      return index_iter_->status();
+    } else if (block_iter_points_to_real_block_) {
+      return block_iter_.status();
+    } else {
+      return Status::OK();
+    }
+  }
+
+  Status old_status_impl() const {
+    // Prefix index set status to NotFound when the prefix does not exist
+    if (!old_index_iter_->status().ok() && !old_index_iter_->status().IsNotFound()) {
+      return old_index_iter_->status();
+    } else if (old_block_iter_points_to_real_block_) {
+      return old_block_iter_.status();
+    } else {
+      return Status::OK();
+    }
   }
 
   std::unique_ptr<InternalIteratorBase<IndexValue>> index_iter_;
@@ -121,13 +218,20 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
     kUnknown,
   };
 
-  bool latest_only;
+  enum class IterState {
+    NewVersion,
+    OldVersion,
+    OldVersioDone,
+  };
+  IterState iter_state_;
+
   const SeparatedBlockBasedTable* table_;
   const ReadOptions& read_options_;
   const InternalKeyComparator& icomp_;
   UserComparatorWrapper user_comparator_;
   PinnedIteratorsManager* pinned_iters_mgr_;
   DataBlockIter block_iter_;
+  DataBlockIter old_block_iter_;
   const SliceTransform* prefix_extractor_;
   uint64_t prev_block_offset_ = std::numeric_limits<uint64_t>::max();
   BlockCacheLookupContext lookup_context_;
@@ -138,14 +242,17 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
   // True if block_iter_ is initialized and points to the same block
   // as index iterator.
   bool block_iter_points_to_real_block_;
+  bool old_block_iter_points_to_real_block_;
   // See InternalIteratorBase::IsOutOfBound().
   bool is_out_of_bound_ = false;
+  bool is_old_out_of_bound_ = false;
   // How current data block's boundary key with the next block is compared with
   // iterate upper bound.
   BlockUpperBound block_upper_bound_check_ = BlockUpperBound::kUnknown;
   // True if we're standing at the first key of a block, and we haven't loaded
   // that block yet. A call to PrepareValue() will trigger loading the block.
   bool is_at_first_key_from_index_ = false;
+  bool is_old_at_first_key_from_index_ = false;
   bool check_filter_;
   bool need_upper_bound_check_;
 
@@ -179,6 +286,15 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
     //    }
     return true;
   }
+
+  void CheckDataBlockWithinUpperBound();
+
+  void ParseItem();
+
+  SequenceNumber current_key_version() const;
+
+  bool seek_to_version(SequenceNumber s);
+  bool next_version();
 };
 
 }  // namespace ROCKSDB_NAMESPACE

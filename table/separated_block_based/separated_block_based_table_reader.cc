@@ -33,6 +33,7 @@
 #include "rocksdb/table.h"
 #include "rocksdb/table_properties.h"
 #include "rocksdb/trace_record.h"
+#include "separated_block_based_table_iterator.h"
 #include "table/block_based/block.h"
 #include "table/block_based/block_based_filter_block.h"
 #include "table/block_based/block_based_table_factory.h"
@@ -370,6 +371,13 @@ InternalIterator* SeparatedBlockBasedTable::NewIterator(
           nullptr, nullptr, &lookup_context, true));
 
   if (arena == nullptr) {
+    return new SeparatedBlockBasedTableIterator(
+        this, read_options, rep_->internal_comparator, std::move(index_iter),
+        std::move(old_index_iter),
+        !skip_filters && !read_options.total_order_seek &&
+            prefix_extractor != nullptr,
+        need_upper_bound_check, prefix_extractor, caller,
+        compaction_readahead_size, allow_unprepared_value);
   } else {
   }
 
@@ -463,6 +471,56 @@ Status SeparatedBlockBasedTable::ReadRangeDelBlock(
     InternalIterator* meta_iter,
     const InternalKeyComparator& internal_comparator,
     BlockCacheLookupContext* lookup_context) {
+  Status s;
+  BlockHandle handle;
+  s = FindOptionalMetaBlock(meta_iter, kPropertiesBlockName, &handle);
+
+  if (!s.ok()) {
+    ROCKS_LOG_WARN(rep_->ioptions.logger,
+                   "Error when seeking to properties block from file: %s",
+                   s.ToString().c_str());
+  } else if (!handle.IsNull()) {
+    s = meta_iter->status();
+    std::unique_ptr<TableProperties> table_properties;
+    if (s.ok()) {
+      s = ReadTablePropertiesHelper(
+          ro, handle, rep_->file.get(), prefetch_buffer, rep_->footer,
+          rep_->ioptions, &table_properties, nullptr /* memory_allocator */);
+    }
+    IGNORE_STATUS_IF_ERROR(s);
+
+    if (!s.ok()) {
+      ROCKS_LOG_WARN(rep_->ioptions.logger,
+                     "Encountered error while reading data from properties "
+                     "block %s",
+                     s.ToString().c_str());
+    } else {
+      assert(table_properties != nullptr);
+      rep_->table_properties = std::move(table_properties);
+      rep_->blocks_maybe_compressed =
+          rep_->table_properties->compression_name !=
+          CompressionTypeToString(kNoCompression);
+      rep_->blocks_definitely_zstd_compressed =
+          (rep_->table_properties->compression_name ==
+               CompressionTypeToString(kZSTD) ||
+           rep_->table_properties->compression_name ==
+               CompressionTypeToString(kZSTDNotFinalCompression));
+    }
+  } else {
+    ROCKS_LOG_ERROR(rep_->ioptions.logger,
+                    "Cannot find Properties block from file.");
+  }
+
+  // Read the table properties, if provided.
+  if (rep_->table_properties) {
+    // todo
+    rep_->index_key_includes_seq =
+        rep_->table_properties->index_key_is_user_key == 0;
+    rep_->index_value_is_full =
+        rep_->table_properties->index_value_is_delta_encoded == 0;
+    // todo
+  }
+
   return Status();
 }
 
@@ -763,6 +821,50 @@ void SeparatedBlockBasedTable::UpdateCacheInsertionMetrics(
   }
 }
 
+template <>
+DataBlockIter* SeparatedBlockBasedTable::InitBlockIterator<DataBlockIter>(
+    const Rep* rep, Block* block, BlockType block_type,
+    DataBlockIter* input_iter, bool block_contents_pinned) {
+  return block->NewDataIterator(rep->internal_comparator.user_comparator(),
+                                rep->get_global_seqno(block_type), input_iter,
+                                rep->ioptions.stats, block_contents_pinned);
+}
+
+template <>
+IndexBlockIter* SeparatedBlockBasedTable::InitBlockIterator<IndexBlockIter>(
+    const Rep* rep, Block* block, BlockType block_type,
+    IndexBlockIter* input_iter, bool block_contents_pinned) {
+  return block->NewIndexIterator(
+      rep->internal_comparator.user_comparator(),
+      rep->get_global_seqno(block_type), input_iter, rep->ioptions.stats,
+      /* total_order_seek */ true, rep->index_has_first_key,
+      rep->index_key_includes_seq, rep->index_value_is_full,
+      block_contents_pinned);
+}
+
+Cache::Handle* SeparatedBlockBasedTable::GetEntryFromCache(
+    const CacheTier& cache_tier, Cache* block_cache, const Slice& key,
+    BlockType block_type, const bool wait, GetContext* get_context,
+    const Cache::CacheItemHelper* cache_helper,
+    const Cache::CreateCallback& create_cb, Cache::Priority priority) const {
+  Cache::Handle* cache_handle = nullptr;
+  if (cache_tier == CacheTier::kNonVolatileBlockTier) {
+    cache_handle = block_cache->Lookup(key, cache_helper, create_cb, priority,
+                                       wait, rep_->ioptions.statistics.get());
+  } else {
+    cache_handle = block_cache->Lookup(key, rep_->ioptions.statistics.get());
+  }
+
+  if (cache_handle != nullptr) {
+    //    UpdateCacheHitMetrics(block_type, get_context,
+    //                          block_cache->GetUsage(cache_handle));
+  } else {
+    //    UpdateCacheMissMetrics(block_type, get_context);
+  }
+
+  return cache_handle;
+}
+
 template <typename TBlocklike>
 Status SeparatedBlockBasedTable::GetDataBlockFromCache(
     const Slice& cache_key, Cache* block_cache, Cache* block_cache_compressed,
@@ -796,18 +898,17 @@ Status SeparatedBlockBasedTable::GetDataBlockFromCache(
   if (block_cache != nullptr) {
     assert(!cache_key.empty());
     Cache::Handle* cache_handle = nullptr;
-    assert(false);
-//    cache_handle = GetEntryFromCache(
-//        rep_->ioptions.lowest_used_cache_tier, block_cache, cache_key,
-//        block_type, wait, get_context,
-//        BlocklikeTraits<TBlocklike>::GetCacheItemHelper(block_type), create_cb,
-//        priority);
-//    if (cache_handle != nullptr) {
-//      block->SetCachedValue(
-//          reinterpret_cast<TBlocklike*>(block_cache->Value(cache_handle)),
-//          block_cache, cache_handle);
-//      return s;
-//    }
+    cache_handle = GetEntryFromCache(
+        rep_->ioptions.lowest_used_cache_tier, block_cache, cache_key,
+        block_type, wait, get_context,
+        BlocklikeTraits<TBlocklike>::GetCacheItemHelper(block_type), create_cb,
+        priority);
+    if (cache_handle != nullptr) {
+      block->SetCachedValue(
+          reinterpret_cast<TBlocklike*>(block_cache->Value(cache_handle)),
+          block_cache, cache_handle);
+      return s;
+    }
   }
 
   // If not found, search from the compressed block cache.
@@ -944,14 +1045,62 @@ Status SeparatedBlockBasedTable::MaybeReadBlockAndLoadToCache(
     // file.
     if (block_entry->GetValue() == nullptr &&
         block_entry->GetCacheHandle() == nullptr && !no_io && ro.fill_cache) {
-      assert(false);
+      Statistics* statistics = rep_->ioptions.stats;
+      const bool maybe_compressed =
+          block_type != BlockType::kFilter &&
+          block_type != BlockType::kCompressionDictionary &&
+          rep_->blocks_maybe_compressed;
+      const bool do_uncompress = maybe_compressed && !block_cache_compressed;
+      CompressionType raw_block_comp_type;
+      BlockContents raw_block_contents;
+      if (!contents) {
+        Histograms histogram = for_compaction ? READ_BLOCK_COMPACTION_MICROS
+                                              : READ_BLOCK_GET_MICROS;
+        StopWatch sw(rep_->ioptions.clock, statistics, histogram);
+        BlockFetcher block_fetcher(
+            rep_->file.get(), prefetch_buffer, rep_->footer, ro, handle,
+            &raw_block_contents, rep_->ioptions, do_uncompress,
+            maybe_compressed, block_type, uncompression_dict,
+            rep_->persistent_cache_options,
+            GetMemoryAllocator(rep_->table_options),
+            GetMemoryAllocatorForCompressedBlock(rep_->table_options));
+        s = block_fetcher.ReadBlockContents();
+        raw_block_comp_type = block_fetcher.get_compression_type();
+        contents = &raw_block_contents;
+        if (get_context) {
+          switch (block_type) {
+            case BlockType::kIndex:
+              ++get_context->get_context_stats_.num_index_read;
+              break;
+            case BlockType::kFilter:
+              ++get_context->get_context_stats_.num_filter_read;
+              break;
+            case BlockType::kData:
+              ++get_context->get_context_stats_.num_data_read;
+              break;
+            default:
+              break;
+          }
+        }
+      } else {
+        raw_block_comp_type = GetBlockCompressionType(*contents);
+      }
+      if (s.ok()) {
+        // If filling cache is allowed and a cache is configured, try to put the
+        // block to the cache.
+        (void)raw_block_comp_type;
+        //        s = PutDataBlockToCache(
+        //            key, block_cache, block_cache_compressed, block_entry,
+        //            contents, raw_block_comp_type, uncompression_dict,
+        //            GetMemoryAllocator(rep_->table_options), block_type,
+        //            get_context);
+      }
     }
   }
 
   // Fill lookup_context.
   if (block_cache_tracer_ && block_cache_tracer_->is_tracing_enabled() &&
       lookup_context) {
-    assert(false);
   }
 
   assert(s.ok() || block_entry->GetValue() == nullptr);

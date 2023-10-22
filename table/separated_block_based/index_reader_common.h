@@ -32,7 +32,7 @@ class SeparatedBlockBasedTable::IndexReaderCommon : public BlockBasedTable::Inde
                                GetContext* get_context,
                                BlockCacheLookupContext* lookup_context,
                                CachableEntry<Block>* index_block,
-                               CachableEntry<Block>* old_index_block);
+                               bool old_data_block);
 
   const SeparatedBlockBasedTable* table() const { return table_; }
 
@@ -69,7 +69,8 @@ class SeparatedBlockBasedTable::IndexReaderCommon : public BlockBasedTable::Inde
 
   Status GetOrReadIndexBlock(bool no_io, GetContext* get_context,
                              BlockCacheLookupContext* lookup_context,
-                             CachableEntry<Block>* index_block) const;
+                             CachableEntry<Block>* index_block,
+                             bool old_data_block) const;
 
   size_t ApproximateIndexBlockMemoryUsage() const {
     assert(!index_block_.GetOwnValue() || index_block_.GetValue() != nullptr);

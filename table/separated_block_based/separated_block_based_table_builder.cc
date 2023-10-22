@@ -992,6 +992,8 @@ void SeparatedBlockBasedTableBuilder::WriteIndexBlock(
     IndexBuilder* index_builder) {
   IndexBuilder::IndexBlocks index_blocks;
   auto index_builder_status = index_builder->Finish(&index_blocks);
+  std::cout << "WriteIndexBlock, data "
+            << index_blocks.index_block_contents.ToString(true) << std::endl;
   if (index_builder_status.IsIncomplete()) {
     // We we have more than one index partition then meta_blocks are not
     // supported for the index. Currently meta_blocks are used only by
@@ -1227,7 +1229,6 @@ Status SeparatedBlockBasedTableBuilder::Finish() {
     const std::string& block_contents = rep_->old_data_buffers[i];
     WriteBlock(block_contents, &h, BlockType::kData);
     auto& p = rep_->old_index_metas[i];
-    std::cout << "last key, " << p.first << ", next_key " << p.second << std::endl;
     std::string* last_key = &p.first;
     Slice next_key = Slice(p.second.data(), p.second.size());
     r->old_index_builder->AddIndexEntry(last_key, next_key.empty() ? nullptr: &next_key,
@@ -1337,8 +1338,6 @@ void SeparatedBlockBasedTableBuilder::WriteRawBlock(
   handle->set_size(block_contents.size());
   assert(status().ok());
   assert(io_status().ok());
-  std::cout << "current_handle, off " << handle->offset() << ", size "
-            << handle->size() << std::endl;
   io_s = r->file->Append(block_contents);
   if (io_s.ok()) {
     std::array<char, kBlockTrailerSize> trailer;

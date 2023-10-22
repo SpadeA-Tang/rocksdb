@@ -1642,6 +1642,8 @@ struct ReadOptions {
   // Default: false
   bool adaptive_readahead;
 
+  bool all_versions;
+
   ReadOptions();
   ReadOptions(bool cksum, bool cache);
 };

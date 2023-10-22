@@ -145,6 +145,20 @@ class SeparatedBlockBasedTable : public TableReader {
   Rep* get_rep() { return rep_; }
   const Rep* get_rep() const { return rep_; }
 
+  // input_iter: if it is not null, update this one and return it as Iterator
+  template <typename TBlockIter>
+  TBlockIter* NewDataBlockIterator(
+      const ReadOptions& ro, const BlockHandle& block_handle,
+      TBlockIter* input_iter, BlockType block_type, GetContext* get_context,
+      BlockCacheLookupContext* lookup_context, Status s,
+      FilePrefetchBuffer* prefetch_buffer, bool for_compaction = false) const;
+
+  // input_iter: if it is not null, update this one and return it as Iterator
+  template <typename TBlockIter>
+  TBlockIter* NewDataBlockIterator(const ReadOptions& ro,
+                                   CachableEntry<Block>& block,
+                                   TBlockIter* input_iter, Status s) const;
+
   template <typename TBlocklike>
   Status MaybeReadBlockAndLoadToCache(
       FilePrefetchBuffer* prefetch_buffer, const ReadOptions& ro,
@@ -168,6 +182,13 @@ class SeparatedBlockBasedTable : public TableReader {
   BlockCacheTracer* const block_cache_tracer_;
 
   friend class TableCache;
+
+  // Either Block::NewDataIterator() or Block::NewIndexIterator().
+  template <typename TBlockIter>
+  static TBlockIter* InitBlockIterator(const Rep* rep, Block* block,
+                                       BlockType block_type,
+                                       TBlockIter* input_iter,
+                                       bool block_contents_pinned);
 
   // Create a index reader based on the index type stored in the table.
   // Optionally, user can pass a preloaded meta_index_iter for the index that
@@ -208,6 +229,14 @@ class SeparatedBlockBasedTable : public TableReader {
       BlockCacheLookupContext* lookup_context);
 
   bool PrefixExtractorChanged(const SliceTransform* prefix_extractor) const;
+
+  Cache::Handle* GetEntryFromCache(const CacheTier& cache_tier,
+                                   Cache* block_cache, const Slice& key,
+                                   BlockType block_type, const bool wait,
+                                   GetContext* get_context,
+                                   const Cache::CacheItemHelper* cache_helper,
+                                   const Cache::CreateCallback& create_cb,
+                                   Cache::Priority priority) const;
 };
 
 // Stores all the properties associated with a BlockBasedTable.
@@ -301,6 +330,13 @@ struct SeparatedBlockBasedTable::Rep {
   bool index_value_is_full = true;
 
   const bool immortal_table;
+
+  SequenceNumber get_global_seqno(BlockType block_type) const {
+    return (block_type == BlockType::kFilter ||
+            block_type == BlockType::kCompressionDictionary)
+               ? kDisableGlobalSequenceNumber
+               : global_seqno;
+  }
 };
 
 }  // namespace ROCKSDB_NAMESPACE

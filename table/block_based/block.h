@@ -314,6 +314,8 @@ class BlockIter : public InternalIteratorBase<TValue> {
     UpdateKey();
   }
 
+  void SeekWithoutTs(const Slice& target) { assert(false); }
+
   virtual void SeekForPrev(const Slice& target) override final {
     SeekForPrevImpl(target);
     UpdateKey();
