@@ -52,6 +52,17 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
     block_upper_bound_check_ = BlockUpperBound::kUnknown;
   }
 
+  void ResetOldDataIter() {
+    if (old_block_iter_points_to_real_block_) {
+      if (pinned_iters_mgr_ != nullptr && pinned_iters_mgr_->PinningEnabled()) {
+        old_block_iter_.DelegateCleanupsTo(pinned_iters_mgr_);
+      }
+      old_block_iter_.Invalidate(Status::OK());
+      old_block_iter_points_to_real_block_ = false;
+    }
+    old_block_upper_bound_check_ = BlockUpperBound::kUnknown;
+  }
+
   bool Valid() const override {
     if (iter_state_ == IterState::NewVersion) {
       return !is_out_of_bound_ &&
@@ -65,6 +76,7 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
   }
 
   Slice key() const override {
+    assert(Valid());
     if (iter_state_ == IterState::NewVersion) {
       return key_impl();
     } else {
@@ -234,6 +246,7 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
   DataBlockIter old_block_iter_;
   const SliceTransform* prefix_extractor_;
   uint64_t prev_block_offset_ = std::numeric_limits<uint64_t>::max();
+  uint64_t prev_old_block_offset_ = std::numeric_limits<uint64_t>::max();
   BlockCacheLookupContext lookup_context_;
 
   BlockPrefetcher block_prefetcher_;
@@ -249,6 +262,7 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
   // How current data block's boundary key with the next block is compared with
   // iterate upper bound.
   BlockUpperBound block_upper_bound_check_ = BlockUpperBound::kUnknown;
+  BlockUpperBound old_block_upper_bound_check_ = BlockUpperBound::kUnknown;
   // True if we're standing at the first key of a block, and we haven't loaded
   // that block yet. A call to PrepareValue() will trigger loading the block.
   bool is_at_first_key_from_index_ = false;
@@ -260,11 +274,15 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
   void SeekImpl(const Slice* target);
 
   void InitDataBlock();
+  void InitOldDataBlock();
   bool MaterializeCurrentBlock();
   void FindKeyForward();
+  void FindOldKeyForward();
   void FindBlockForward();
+  void FindOldBlockForward();
   void FindKeyBackward();
   void CheckOutOfBound();
+  void CheckOldOutOfBound();
 
   bool CheckPrefixMayMatch(const Slice& ikey, IterDirection direction) {
     if (need_upper_bound_check_ && direction == IterDirection::kBackward) {
@@ -288,13 +306,17 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
   }
 
   void CheckDataBlockWithinUpperBound();
+  void CheckOldDataBlockWithinUpperBound();
 
   void ParseItem();
 
   SequenceNumber current_key_version() const;
 
   bool seek_to_version(SequenceNumber s);
-  bool next_version();
+  bool next_version(SequenceNumber s);
+  bool same_old_key();
+  void seek_old_block(SequenceNumber s);
+  void NextImpl();
 };
 
 }  // namespace ROCKSDB_NAMESPACE

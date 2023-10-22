@@ -183,8 +183,6 @@ class ShortenedIndexBuilder : public IndexBuilder {
       // BlockBuilder::Add() below won't use delta-encoded slice.
     }
     last_encoded_handle_ = block_handle;
-    std::cout << "last_handle, off " << last_encoded_handle_.offset()
-              << ", size " << last_encoded_handle_.size() << std::endl;
     const Slice delta_encoded_entry_slice(delta_encoded_entry);
     index_block_builder_.Add(sep, encoded_entry, &delta_encoded_entry_slice);
     if (!seperator_is_key_plus_seq_) {

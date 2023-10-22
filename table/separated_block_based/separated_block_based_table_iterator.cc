@@ -3,14 +3,19 @@
 namespace ROCKSDB_NAMESPACE {
 void SeparatedBlockBasedTableIterator::Seek(const Slice& target) {
   SeekImpl(&target);
+  ParseItem();
 }
 
-void SeparatedBlockBasedTableIterator::SeekToFirst() { SeekImpl(nullptr); }
+void SeparatedBlockBasedTableIterator::SeekToFirst() {
+  SeekImpl(nullptr);
+  ParseItem();
+}
 
 void SeparatedBlockBasedTableIterator::ParseItem() {
   SequenceNumber s(read_options_.snapshot->GetSequenceNumber());
   while (Valid()) {
-    if (current_key_version() > s && !seek_to_version(s)) {
+    SequenceNumber cur_s = current_key_version();
+    if (cur_s > s && !seek_to_version(s)) {
       Next();
       continue;
     }
@@ -23,7 +28,7 @@ bool SeparatedBlockBasedTableIterator::seek_to_version(SequenceNumber s) {
     return true;
   }
 
-  while (next_version()) {
+  while (next_version(s)) {
     if (s >= current_key_version()) {
       return true;
     }
@@ -35,14 +40,84 @@ bool SeparatedBlockBasedTableIterator::seek_to_version(SequenceNumber s) {
 SequenceNumber SeparatedBlockBasedTableIterator::current_key_version() const {
   auto k = key();
   uint64_t num = DecodeFixed64(k.data() + k.size() - kNumInternalBytes);
-  unsigned char c = num & 0xff;
   return num >> 8;
 }
 
-bool SeparatedBlockBasedTableIterator::next_version() {
+bool SeparatedBlockBasedTableIterator::next_version(SequenceNumber s) {
   if (iter_state_ == IterState::OldVersioDone) {
     return false;
   }
+  if (same_old_key()) {
+    if (iter_state_ == IterState::NewVersion) {
+    } else {
+      old_block_iter_.Next();
+    }
+    if (!old_block_iter_.Valid()) {
+      iter_state_ = IterState::OldVersioDone;
+      return false;
+    }
+    if (!same_old_key()) {
+      iter_state_ = IterState::OldVersioDone;
+      return false;
+    }
+    iter_state_ = IterState::OldVersion;
+    return true;
+  }
+  seek_old_block(s);
+  if (!old_block_iter_.Valid()) {
+    iter_state_ = IterState::OldVersioDone;
+    return false;
+  }
+  return true;
+}
+
+void SeparatedBlockBasedTableIterator::seek_old_block(SequenceNumber s) {
+  Slice current_key(key_impl());
+  current_key.remove_suffix(kNumInternalBytes);
+  InternalKey key(current_key, s, ValueType::kTypeValue);
+  Slice target = key.Encode();
+
+  // todo: points to real block
+  old_index_iter_->Seek(target);
+  if (!index_iter_->Valid()) {
+    ResetOldDataIter();
+  }
+
+  IndexValue v = index_iter_->value();
+  const bool same_block = old_block_iter_points_to_real_block_ &&
+                          v.handle.offset() == prev_old_block_offset_;
+  if (!v.first_internal_key.empty() && !same_block &&
+      (icomp_.Compare(target, v.first_internal_key) <= 0) &&
+      allow_unprepared_value_) {
+    is_old_at_first_key_from_index_ = true;
+    ResetOldDataIter();
+  } else {
+    if (!same_block) {
+      InitOldDataBlock();
+    } else {
+      CheckOldDataBlockWithinUpperBound();
+    }
+
+    old_block_iter_.Seek(target);
+    // todo: seek to first key
+    FindOldKeyForward();
+  }
+}
+
+bool SeparatedBlockBasedTableIterator::same_old_key() {
+  assert(block_iter_.Valid());
+  if (!old_block_iter_.Valid()) {
+    return false;
+  }
+  Slice old_key = old_key_impl();
+  Slice key = key_impl();
+  if (old_key.size() != key.size()) {
+    return false;
+  }
+  // todo: temporarily use sequence number for comparison
+  old_key.remove_suffix(kNumInternalBytes);
+  key.remove_suffix(kNumInternalBytes);
+  return old_key.compare(key) == 0;
 }
 
 void SeparatedBlockBasedTableIterator::SeekImpl(const rocksdb::Slice* target) {
@@ -123,6 +198,19 @@ void SeparatedBlockBasedTableIterator::CheckDataBlockWithinUpperBound() {
   }
 }
 
+void SeparatedBlockBasedTableIterator::CheckOldDataBlockWithinUpperBound() {
+  if (read_options_.iterate_upper_bound != nullptr &&
+      old_block_iter_points_to_real_block_) {
+    old_block_upper_bound_check_ =
+        (user_comparator_.CompareWithoutTimestamp(
+             *read_options_.iterate_upper_bound,
+             /*a_has_ts=*/false, old_index_iter_->user_key(),
+             /*b_has_ts=*/true) > 0)
+            ? BlockUpperBound::kUpperBoundBeyondCurBlock
+            : BlockUpperBound::kUpperBoundInCurBlock;
+  }
+}
+
 void SeparatedBlockBasedTableIterator::FindKeyForward() {
   // This method's code is kept short to make it likely to be inlined.
 
@@ -137,6 +225,16 @@ void SeparatedBlockBasedTableIterator::FindKeyForward() {
     FindBlockForward();
   } else {
     // This is the fast path that avoids a function call.
+  }
+}
+
+// todo: Is it necessary for old block to call this function
+void SeparatedBlockBasedTableIterator::FindOldKeyForward() {
+  assert(!is_out_of_bound_);
+  assert(block_iter_points_to_real_block_);
+  if (!block_iter_.Valid()) {
+    FindOldBlockForward();
+  } else {
   }
 }
 
@@ -187,13 +285,62 @@ void SeparatedBlockBasedTableIterator::FindBlockForward() {
   } while (!block_iter_.Valid());
 }
 
+void SeparatedBlockBasedTableIterator::FindOldBlockForward() {
+  do {
+    if (!old_block_iter_.status().ok()) {
+      return;
+    }
+    const bool next_block_is_out_of_bound =
+        read_options_.iterate_upper_bound != nullptr &&
+        old_block_iter_points_to_real_block_ &&
+        old_block_upper_bound_check_ == BlockUpperBound::kUpperBoundInCurBlock;
+    assert(!next_block_is_out_of_bound ||
+           user_comparator_.CompareWithoutTimestamp(
+               *read_options_.iterate_upper_bound, /*a_has_ts=*/false,
+               old_index_iter_->user_key(), /*b_has_ts=*/true) <= 0);
+    ResetOldDataIter();
+    old_index_iter_->Next();
+    if (next_block_is_out_of_bound) {
+      if (old_index_iter_->Valid()) {
+        is_old_out_of_bound_ = true;
+      }
+      return;
+    }
+
+    if (!old_index_iter_->Valid()) {
+      return;
+    }
+
+    IndexValue v = index_iter_->value();
+    if (!v.first_internal_key.empty() && allow_unprepared_value_) {
+      // Index contains the first key of the block. Defer reading the block.
+      is_old_at_first_key_from_index_ = true;
+      return;
+    }
+
+    InitOldDataBlock();
+    block_iter_.SeekToFirst();
+  } while (!old_block_iter_.Valid());
+}
+
 void SeparatedBlockBasedTableIterator::CheckOutOfBound() {
   if (read_options_.iterate_upper_bound != nullptr &&
       block_upper_bound_check_ != BlockUpperBound::kUpperBoundBeyondCurBlock &&
       Valid()) {
     is_out_of_bound_ =
         user_comparator_.CompareWithoutTimestamp(
-            *read_options_.iterate_upper_bound, /*a_has_ts=*/false, user_key(),
+            *read_options_.iterate_upper_bound, /*a_has_ts=*/false, user_key_impl(),
+            /*b_has_ts=*/true) <= 0;
+  }
+}
+
+void SeparatedBlockBasedTableIterator::CheckOldOutOfBound() {
+  if (read_options_.iterate_upper_bound != nullptr &&
+      old_block_upper_bound_check_ != BlockUpperBound::kUpperBoundBeyondCurBlock &&
+      Valid()) {
+    is_out_of_bound_ =
+        user_comparator_.CompareWithoutTimestamp(
+            *read_options_.iterate_upper_bound, /*a_has_ts=*/false, user_old_key_impl(),
             /*b_has_ts=*/true) <= 0;
   }
 }
@@ -206,10 +353,19 @@ void SeparatedBlockBasedTableIterator::Next() {
   if (is_at_first_key_from_index_ && !MaterializeCurrentBlock()) {
     return;
   }
+  if (read_options_.all_versions && Valid() && next_version(SequenceNumber(0))) {
+    iter_state_ = IterState::OldVersion;
+    CheckOutOfBound();
+    return;
+  }
+
   assert(block_iter_points_to_real_block_);
   block_iter_.Next();
   FindKeyForward();
   CheckOutOfBound();
+  iter_state_ = IterState::NewVersion;
+
+  ParseItem();
 }
 
 bool SeparatedBlockBasedTableIterator::NextAndGetResult(IterateResult* result) {
@@ -247,6 +403,29 @@ void SeparatedBlockBasedTableIterator::InitDataBlock() {
         /*for_compaction=*/is_for_compaction);
     block_iter_points_to_real_block_ = true;
     CheckDataBlockWithinUpperBound();
+  }
+}
+
+void SeparatedBlockBasedTableIterator::InitOldDataBlock() {
+  BlockHandle data_block_handle = old_index_iter_->value().handle;
+  if (!old_block_iter_points_to_real_block_ ||
+      data_block_handle.offset() != prev_old_block_offset_ ||
+      // if previous attempt of reading the block missed cache, try again
+      old_block_iter_.status().IsIncomplete()) {
+    if (old_block_iter_points_to_real_block_) {
+      ResetOldDataIter();
+    }
+    auto* rep = table_->get_rep();
+    bool is_for_compaction =
+        lookup_context_.caller == TableReaderCaller::kCompaction;
+    Status s;
+    table_->NewDataBlockIterator<DataBlockIter>(
+        read_options_, data_block_handle, &old_block_iter_, BlockType::kData,
+        /*get_context=*/nullptr, &lookup_context_, s,
+        block_prefetcher_.prefetch_buffer(),
+        /*for_compaction=*/is_for_compaction);
+    old_block_iter_points_to_real_block_ = true;
+    CheckOldDataBlockWithinUpperBound();
   }
 }
 

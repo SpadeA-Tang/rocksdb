@@ -1,3 +1,4 @@
+#include "db/snapshot_impl.h"
 #include "db/table_properties_collector.h"
 #include "file/file_util.h"
 #include "options/options_helper.h"
@@ -157,6 +158,10 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   NewSeparatedBlockBasedTableReader(foptions, ioptions, comparator, "test",
                                     &table);
   ReadOptions read_options;
+  read_options.all_versions = true;
+  SnapshotImpl s;
+  s.number_ = 3;
+  read_options.snapshot = &s;
   const MutableCFOptions moptions(options);
   std::unique_ptr<InternalIterator> index_iter(
       table->NewIterator(read_options, moptions.prefix_extractor.get(), nullptr,
@@ -164,9 +169,11 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   index_iter->SeekToFirst();
   while (index_iter->Valid()) {
     Slice k(index_iter->key());
+    ParsedInternalKey ikey;
+    ParseInternalKey(k, &ikey, false);
     Slice value(index_iter->value());
-    std::cout << "key " << k.ToString() << ", value " << value.ToString()
-              << std::endl;
+    std::cout << "key " << ikey.user_key.ToString() << ", sequence " << ikey.sequence
+              << ", value " << value.ToString() << std::endl;
     index_iter->Next();
   }
 }
