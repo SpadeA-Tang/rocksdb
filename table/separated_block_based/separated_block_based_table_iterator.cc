@@ -353,7 +353,7 @@ void SeparatedBlockBasedTableIterator::Next() {
   if (is_at_first_key_from_index_ && !MaterializeCurrentBlock()) {
     return;
   }
-  if (read_options_.all_versions && Valid() && next_version(SequenceNumber(0))) {
+  if (read_options_.all_versions && Valid() && next_version(kMaxSequenceNumber)) {
     iter_state_ = IterState::OldVersion;
     CheckOutOfBound();
     return;
