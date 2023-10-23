@@ -22,7 +22,11 @@ class SeparatedBlockTest
       public testing::WithParamInterface<std::tuple<
           CompressionType, bool, BlockBasedTableOptions::IndexType, bool>> {
  protected:
- protected:
+  static std::string ToInternalKey(const std::string& key, SequenceNumber s) {
+    InternalKey internal_key(key, s, ValueType::kTypeValue);
+    return internal_key.Encode().ToString();
+  }
+
   CompressionType compression_type_;
   bool use_direct_reads_;
 
@@ -42,9 +46,28 @@ class SeparatedBlockTest
 
   void TearDown() override { EXPECT_OK(DestroyDir(env_, test_dir_)); }
 
+  void CreateTableWithDefaultData(const std::string& table_name, uint32_t num, uint32_t seq_nums) {
+    std::vector<std::pair<std::string, std::string>> kv;
+    {
+      Random rnd(101);
+        for (uint32_t key = 0; key < num; key++) {
+          char k[9] = {0};
+          sprintf(k, "%08u", key);
+          std::string v;
+          for (uint32_t ts = seq_nums; ts > 0; ts--) {
+            std::string ikey =
+                SeparatedBlockTest::ToInternalKey(k, SequenceNumber(ts));
+            v = rnd.HumanReadableString(ts+5);
+            kv.emplace_back(ikey, v);
+          }
+      }
+    }
+    CreateTable(table_name, CompressionType::kNoCompression, kv);
+  }
+
   void CreateTable(const std::string& table_name,
                    const CompressionType& compression_type,
-                   const std::map<std::string, std::string>& kv) {
+                   const std::vector<std::pair<std::string, std::string>>& kv) {
     std::unique_ptr<WritableFileWriter> writer;
     NewFileWriter(table_name, &writer);
 
@@ -64,11 +87,7 @@ class SeparatedBlockTest
 
     // Build table.
     for (auto it = kv.begin(); it != kv.end(); it++) {
-      for (uint64_t j = 3; j > 0; j--) {
-        std::string k = ToInternalKey(it->first, SequenceNumber(j));
-        std::string v = it->second;
-        table_builder->Add(k, v);
-      }
+      table_builder->Add(it->first, it->second);
     }
     ASSERT_OK(table_builder->Finish());
   }
@@ -121,34 +140,10 @@ class SeparatedBlockTest
     reader->reset(new RandomAccessFileReader(std::move(f), path,
                                              env_->GetSystemClock().get()));
   }
-
-  static std::string ToInternalKey(const std::string& key, SequenceNumber s) {
-    InternalKey internal_key(key, s, ValueType::kTypeValue);
-    return internal_key.Encode().ToString();
-  }
 };
 
 TEST_F(SeparatedBlockTest, TestBuilder) {
-  std::map<std::string, std::string> kv;
-  {
-    Random rnd(101);
-    uint32_t key = 0;
-    for (int block = 0; block < 10; block++) {
-      for (int i = 0; i < 16; i++) {
-        char k[9] = {0};
-        // Internal key is constructed directly from this key,
-        // and internal key size is required to be >= 8 bytes,
-        // so use %08u as the format string.
-        sprintf(k, "%08u", key);
-        std::string v;
-        v = rnd.HumanReadableString(10);
-        kv[std::string(k)] = v;
-        key++;
-      }
-    }
-  }
-
-  CreateTable("test", CompressionType::kNoCompression, kv);
+  CreateTableWithDefaultData("test", 100, 3);
   std::unique_ptr<SeparatedBlockBasedTable> table;
   Options options;
   ImmutableOptions ioptions(options);
@@ -157,24 +152,96 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   InternalKeyComparator comparator(options.comparator);
   NewSeparatedBlockBasedTableReader(foptions, ioptions, comparator, "test",
                                     &table);
-  ReadOptions read_options;
-  read_options.all_versions = true;
-  SnapshotImpl s;
-  s.number_ = 3;
-  read_options.snapshot = &s;
-  const MutableCFOptions moptions(options);
-  std::unique_ptr<InternalIterator> index_iter(
-      table->NewIterator(read_options, moptions.prefix_extractor.get(), nullptr,
-                         false, TableReaderCaller::kUncategorized));
-  index_iter->SeekToFirst();
-  while (index_iter->Valid()) {
-    Slice k(index_iter->key());
-    ParsedInternalKey ikey;
-    ParseInternalKey(k, &ikey, false);
-    Slice value(index_iter->value());
-    std::cout << "key " << ikey.user_key.ToString() << ", sequence " << ikey.sequence
-              << ", value " << value.ToString() << std::endl;
-    index_iter->Next();
+
+  // ================ Full Scan =================
+  {
+    ReadOptions read_options;
+    read_options.all_versions = true;
+    SnapshotImpl s;
+    s.number_ = 3;
+    read_options.snapshot = &s;
+    const MutableCFOptions moptions(options);
+    std::unique_ptr<InternalIterator> table_iter(
+        table->NewIterator(read_options, moptions.prefix_extractor.get(),
+                           nullptr, false, TableReaderCaller::kUncategorized));
+    table_iter->SeekToFirst();
+    uint32_t verify = 0;
+    while (table_iter->Valid()) {
+      char k[9] = {0};
+      sprintf(k, "%08u", verify);
+
+      Slice key(table_iter->key());
+      ParsedInternalKey ikey;
+      ParseInternalKey(key, &ikey, false);
+      assert(ikey.user_key.compare(Slice{k}) == 0);
+      assert(ikey.sequence == SequenceNumber{3});
+      table_iter->Next();
+
+      key = table_iter->key();
+      ParseInternalKey(key, &ikey, false);
+      assert(ikey.user_key.compare(Slice{k}) == 0);
+      assert(ikey.sequence == SequenceNumber{2});
+      table_iter->Next();
+
+      key = table_iter->key();
+      ParseInternalKey(key, &ikey, false);
+      assert(ikey.user_key.compare(Slice{k}) == 0);
+      assert(ikey.sequence == SequenceNumber{1});
+      table_iter->Next();
+      verify++;
+    }
+    std::cout << "verify " << verify << std::endl;
+  }
+
+  {
+    ReadOptions read_options;
+    read_options.all_versions = false;
+    SnapshotImpl s;
+    s.number_ = 3;
+    read_options.snapshot = &s;
+    const MutableCFOptions moptions(options);
+    std::unique_ptr<InternalIterator> table_iter(
+        table->NewIterator(read_options, moptions.prefix_extractor.get(),
+                           nullptr, false, TableReaderCaller::kUncategorized));
+    table_iter->SeekToFirst();
+    uint32_t verify = 0;
+    while (table_iter->Valid()) {
+      char k[9] = {0};
+      sprintf(k, "%08u", verify);
+
+      Slice key(table_iter->key());
+      ParsedInternalKey ikey;
+      ParseInternalKey(key, &ikey, false);
+      assert(ikey.user_key.compare(Slice{k}) == 0);
+      assert(ikey.sequence == SequenceNumber{3});
+      table_iter->Next();
+
+      verify++;
+    }
+    std::cout << "verify " << verify << std::endl;
+  }
+
+  {
+    ReadOptions read_options;
+    read_options.all_versions = false;
+    SnapshotImpl s;
+    s.number_ = 2;
+    read_options.snapshot = &s;
+    const MutableCFOptions moptions(options);
+    std::unique_ptr<InternalIterator> table_iter(
+        table->NewIterator(read_options, moptions.prefix_extractor.get(),
+                           nullptr, false, TableReaderCaller::kUncategorized));
+    table_iter->SeekToFirst();
+    while (table_iter->Valid()) {
+      Slice key(table_iter->key());
+      ParsedInternalKey ikey;
+      ParseInternalKey(key, &ikey, false);
+      Slice value(table_iter->value());
+      std::cout << "key " << ikey.user_key.ToString() << ", sequence " << ikey.sequence
+                << ", value " << value.ToString() << std::endl;
+      table_iter->Next();
+
+    }
   }
 }
 
