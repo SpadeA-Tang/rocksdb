@@ -314,8 +314,6 @@ class BlockIter : public InternalIteratorBase<TValue> {
     UpdateKey();
   }
 
-  void SeekWithoutTs(const Slice& target) { assert(false); }
-
   virtual void SeekForPrev(const Slice& target) override final {
     SeekForPrevImpl(target);
     UpdateKey();
@@ -486,10 +484,12 @@ class BlockIter : public InternalIteratorBase<TValue> {
  protected:
   template <typename DecodeKeyFunc>
   inline bool BinarySeek(const Slice& target, uint32_t* index,
-                         bool* is_index_key_result);
+                         bool* is_index_key_result,
+                         bool not_consider_sequence_num = false);
 
   void FindKeyAfterBinarySeek(const Slice& target, uint32_t index,
-                              bool is_index_key_result);
+                              bool is_index_key_result,
+                              bool not_consider_sequence_num = false);
 };
 
 class DataBlockIter final : public BlockIter<Slice> {
@@ -548,6 +548,8 @@ class DataBlockIter final : public BlockIter<Slice> {
     prev_entries_idx_ = -1;
   }
 
+  void SeekWithoutTs(const Slice& target);
+
  protected:
   friend Block;
   inline bool ParseNextDataKey(bool* is_shared);
@@ -557,6 +559,7 @@ class DataBlockIter final : public BlockIter<Slice> {
   void SeekForPrevImpl(const Slice& target) override;
   void NextImpl() override;
   void PrevImpl() override;
+  void SeekWithoutTsImpl(const Slice& target);
 
  private:
   // read-amp bitmap

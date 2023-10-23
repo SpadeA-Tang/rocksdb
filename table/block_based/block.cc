@@ -286,6 +286,27 @@ void DataBlockIter::SeekImpl(const Slice& target) {
   FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan);
 }
 
+void DataBlockIter::SeekWithoutTsImpl(const Slice& target) {
+  Slice seek_key = target;
+  PERF_TIMER_GUARD(block_seek_nanos);
+  if (data_ == nullptr) {  // Not init yet
+    return;
+  }
+  uint32_t index = 0;
+  bool skip_linear_scan = false;
+  bool ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan, true);
+
+  if (!ok) {
+    return;
+  }
+  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan, true);
+}
+
+void DataBlockIter::SeekWithoutTs(const Slice& target) {
+  SeekWithoutTsImpl(target);
+  UpdateKey();
+}
+
 void MetaBlockIter::SeekImpl(const Slice& target) {
   Slice seek_key = target;
   PERF_TIMER_GUARD(block_seek_nanos);
@@ -701,7 +722,8 @@ void IndexBlockIter::DecodeCurrentValue(bool is_shared) {
 template <class TValue>
 void BlockIter<TValue>::FindKeyAfterBinarySeek(const Slice& target,
                                                uint32_t index,
-                                               bool skip_linear_scan) {
+                                               bool skip_linear_scan,
+                                               bool not_consider_sequence_num) {
   // SeekToRestartPoint() only does the lookup in the restart block. We need
   // to follow it up with NextImpl() to position the iterator at the restart
   // key.
@@ -726,11 +748,22 @@ void BlockIter<TValue>::FindKeyAfterBinarySeek(const Slice& target,
       if (!Valid()) {
         break;
       }
-      if (current_ == max_offset) {
-        assert(CompareCurrentKey(target) > 0);
-        break;
-      } else if (CompareCurrentKey(target) >= 0) {
-        break;
+      if (not_consider_sequence_num) {
+        if (current_ == max_offset) {
+          assert(icmp().user_comparator()->Compare(raw_key_.GetUserKey(),
+                                                   target) > 0);
+          break;
+        } else if (icmp().user_comparator()->Compare(
+                       raw_key_.GetUserKey(), target) >= 0) {
+          break;
+        }
+      } else {
+        if (current_ == max_offset) {
+          assert(CompareCurrentKey(target) > 0);
+          break;
+        } else if (CompareCurrentKey(target) >= 0) {
+          break;
+        }
       }
     }
   }
@@ -747,7 +780,8 @@ void BlockIter<TValue>::FindKeyAfterBinarySeek(const Slice& target,
 template <class TValue>
 template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
-                                   bool* skip_linear_scan) {
+                                   bool* skip_linear_scan,
+                                   bool not_consider_sequence_num) {
   if (restarts_ == 0) {
     // SST files dedicated to range tombstones are written with index blocks
     // that have no keys while also having `num_restarts_ == 1`. This would
@@ -779,7 +813,13 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
     }
     Slice mid_key(key_ptr, non_shared);
     raw_key_.SetKey(mid_key, false /* copy */);
-    int cmp = CompareCurrentKey(target);
+    int cmp;
+    if (not_consider_sequence_num) {
+      cmp = icmp().user_comparator()->Compare(raw_key_.GetUserKey(),
+                                              target);
+    } else {
+      cmp = CompareCurrentKey(target);
+    }
     if (cmp < 0) {
       // Key at "mid" is smaller than "target". Therefore all
       // blocks before "mid" are uninteresting.

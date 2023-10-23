@@ -40,23 +40,27 @@ class SeparatedBlockTest
     opts.index_type = BlockBasedTableOptions::IndexType::kBinarySearch;
     opts.no_block_cache = false;
     opts.block_size = 600;
+    opts.block_restart_interval = 4;
     table_factory_.reset(static_cast<SeparatedBlockBasedTableFactory*>(
         NewSeparatedBlockBasedTableFactory(opts)));
   }
 
   void TearDown() override { EXPECT_OK(DestroyDir(env_, test_dir_)); }
 
+  std::string internal_key(uint32_t key, SequenceNumber seq) {
+    char k[9] = {0};
+    sprintf(k, "%08u", key);
+    return SeparatedBlockTest::ToInternalKey(k, seq);
+  }
+
   void CreateTableWithDefaultData(const std::string& table_name, uint32_t num, uint32_t seq_nums) {
     std::vector<std::pair<std::string, std::string>> kv;
     {
       Random rnd(101);
         for (uint32_t key = 0; key < num; key++) {
-          char k[9] = {0};
-          sprintf(k, "%08u", key);
           std::string v;
           for (uint32_t ts = seq_nums; ts > 0; ts--) {
-            std::string ikey =
-                SeparatedBlockTest::ToInternalKey(k, SequenceNumber(ts));
+            std::string ikey = internal_key(key, SequenceNumber{ts});
             v = rnd.HumanReadableString(ts+5);
             kv.emplace_back(ikey, v);
           }
@@ -153,7 +157,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   NewSeparatedBlockBasedTableReader(foptions, ioptions, comparator, "test",
                                     &table);
 
-  // ================ Full Scan =================
+  // Full Scan
   {
     ReadOptions read_options;
     read_options.all_versions = true;
@@ -190,9 +194,10 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
       table_iter->Next();
       verify++;
     }
-    std::cout << "verify " << verify << std::endl;
+    assert(verify == 100);
   }
 
+  // not scan all version, can read latest
   {
     ReadOptions read_options;
     read_options.all_versions = false;
@@ -218,9 +223,10 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
 
       verify++;
     }
-    std::cout << "verify " << verify << std::endl;
+    assert(verify == 100);
   }
 
+  // not scan all version, (the second latest)
   {
     ReadOptions read_options;
     read_options.all_versions = false;
@@ -232,6 +238,36 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
         table->NewIterator(read_options, moptions.prefix_extractor.get(),
                            nullptr, false, TableReaderCaller::kUncategorized));
     table_iter->SeekToFirst();
+    uint32_t verify = 0;
+    while (table_iter->Valid()) {
+      char k[9] = {0};
+      sprintf(k, "%08u", verify);
+
+      Slice key(table_iter->key());
+      ParsedInternalKey ikey;
+      ParseInternalKey(key, &ikey, false);
+      assert(ikey.user_key.compare(Slice{k}) == 0);
+      assert(ikey.sequence == SequenceNumber{2});
+      table_iter->Next();
+
+      verify++;
+    }
+    assert(verify == 100);
+  }
+
+  {
+    ReadOptions read_options;
+    read_options.all_versions = false;
+    SnapshotImpl s;
+    s.number_ = 3;
+    read_options.snapshot = &s;
+    const MutableCFOptions moptions(options);
+    std::unique_ptr<InternalIterator> table_iter(
+        table->NewIterator(read_options, moptions.prefix_extractor.get(),
+                           nullptr, false, TableReaderCaller::kUncategorized));
+    char k[9] = {0};
+    sprintf(k, "%08u", 54);
+    table_iter->Seek(std::string(k));
     while (table_iter->Valid()) {
       Slice key(table_iter->key());
       ParsedInternalKey ikey;
@@ -240,7 +276,6 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
       std::cout << "key " << ikey.user_key.ToString() << ", sequence " << ikey.sequence
                 << ", value " << value.ToString() << std::endl;
       table_iter->Next();
-
     }
   }
 }

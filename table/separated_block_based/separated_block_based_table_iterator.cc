@@ -182,7 +182,10 @@ void SeparatedBlockBasedTableIterator::SeekImpl(const rocksdb::Slice* target) {
   CheckOutOfBound();
 
   if (target) {
-    assert(!Valid() || icomp_.Compare(*target, key()) <= 0);
+    // The target may be less than current key in terms of sequence number, but
+    // it's okey, as the ParseItem can point to the correct key
+    assert(!Valid() || icomp_.user_comparator()->Compare(
+                           ExtractUserKey(*target), user_key()) <= 0);
   }
 }
 

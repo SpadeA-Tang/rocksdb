@@ -1218,6 +1218,7 @@ Status SeparatedBlockBasedTableBuilder::Finish() {
   if (r->old_block_flushed) {
     r->old_index_metas.emplace_back(r->last_old_key, std::string{});
   } else {
+    r->first_key_in_next_old_block = nullptr;
     FlushOldDataBlock();
     if (r->old_block_flushed) {
       r->old_index_metas.emplace_back(r->last_old_key, std::string{});
