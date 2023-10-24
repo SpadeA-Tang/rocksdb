@@ -21,6 +21,48 @@ class SeparatedBlockTest
     : public testing::Test,
       public testing::WithParamInterface<std::tuple<
           CompressionType, bool, BlockBasedTableOptions::IndexType, bool>> {
+
+  class MvccComparatorImpl : Comparator {
+   public:
+    MvccComparatorImpl() {}
+    static const char* kClassName() { return "MvccComparatorImpl"; }
+    const char* Name() const override {return kClassName(); }
+
+    int Compare(const Slice& a, const Slice& b) const override {
+      assert(false);
+    }
+
+    bool Equal(const Slice& a, const Slice& b) const override { assert(false); }
+
+    void FindShortestSeparator(std::string* start,
+                               const Slice& limit) const override {
+      assert(false);
+    }
+
+    void FindShortSuccessor(std::string* key) const override {
+      assert(false);
+    }
+
+    bool IsSameLengthImmediateSuccessor(const Slice& s,
+                                        const Slice& t) const override {
+      assert(false);
+    }
+
+    bool CanKeysWithDifferentByteContentsBeEqual() const override {
+      assert(false);
+    }
+
+    using Comparator::CompareWithoutTimestamp;
+    int CompareWithoutTimestamp(const Slice& a, bool /*a_has_ts*/, const Slice& b,
+                                bool /*b_has_ts*/) const override {
+      assert(false);
+    }
+
+    bool EqualWithoutTimestamp(const Slice& a, const Slice& b) const override {
+      assert(false);
+    }
+  };
+
  protected:
   static std::string ToInternalKey(const std::string& key, SequenceNumber s) {
     InternalKey internal_key(key, s, ValueType::kTypeValue);
@@ -265,9 +307,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
     std::unique_ptr<InternalIterator> table_iter(
         table->NewIterator(read_options, moptions.prefix_extractor.get(),
                            nullptr, false, TableReaderCaller::kUncategorized));
-    char k[9] = {0};
-    sprintf(k, "%08u", 54);
-    table_iter->Seek(std::string(k));
+    table_iter->Seek(internal_key(53, 2));
     while (table_iter->Valid()) {
       Slice key(table_iter->key());
       ParsedInternalKey ikey;

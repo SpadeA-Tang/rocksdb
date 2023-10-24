@@ -751,10 +751,10 @@ void BlockIter<TValue>::FindKeyAfterBinarySeek(const Slice& target,
       if (not_consider_sequence_num) {
         if (current_ == max_offset) {
           assert(icmp().user_comparator()->Compare(raw_key_.GetUserKey(),
-                                                   target) > 0);
+                                                   ExtractUserKey(target)) > 0);
           break;
         } else if (icmp().user_comparator()->Compare(
-                       raw_key_.GetUserKey(), target) >= 0) {
+                       raw_key_.GetUserKey(), ExtractUserKey(target)) >= 0) {
           break;
         }
       } else {
@@ -816,7 +816,7 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
     int cmp;
     if (not_consider_sequence_num) {
       cmp = icmp().user_comparator()->Compare(raw_key_.GetUserKey(),
-                                              target);
+                                              ExtractUserKey(target));
     } else {
       cmp = CompareCurrentKey(target);
     }
