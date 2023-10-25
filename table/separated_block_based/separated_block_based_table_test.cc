@@ -21,22 +21,69 @@ class SeparatedBlockTest
     : public testing::Test,
       public testing::WithParamInterface<std::tuple<
           CompressionType, bool, BlockBasedTableOptions::IndexType, bool>> {
-
-  class MvccComparatorImpl : Comparator {
+ public:
+  class MvccComparatorImpl : public Comparator {
    public:
     MvccComparatorImpl() {}
     static const char* kClassName() { return "MvccComparatorImpl"; }
     const char* Name() const override {return kClassName(); }
 
     int Compare(const Slice& a, const Slice& b) const override {
-      assert(false);
+      return a.compare(b);
+      //      return Slice{a.data(), a.size()-8}.compare({b.data(), b.size()-8});
     }
 
-    bool Equal(const Slice& a, const Slice& b) const override { assert(false); }
+    bool Equal(const Slice& a, const Slice& b) const override { return a == b; }
 
     void FindShortestSeparator(std::string* start,
                                const Slice& limit) const override {
-      assert(false);
+      // Find length of common prefix
+      size_t min_length = std::min(start->size(), limit.size());
+      size_t diff_index = 0;
+      while ((diff_index < min_length) &&
+             ((*start)[diff_index] == limit[diff_index])) {
+        diff_index++;
+      }
+
+      if (diff_index >= min_length) {
+        // Do not shorten if one string is a prefix of the other
+      } else {
+        uint8_t start_byte = static_cast<uint8_t>((*start)[diff_index]);
+        uint8_t limit_byte = static_cast<uint8_t>(limit[diff_index]);
+        if (start_byte >= limit_byte) {
+          // Cannot shorten since limit is smaller than start or start is
+          // already the shortest possible.
+          return;
+        }
+        assert(start_byte < limit_byte);
+
+        if (diff_index < limit.size() - 1 || start_byte + 1 < limit_byte) {
+          (*start)[diff_index]++;
+          start->resize(diff_index + 1);
+        } else {
+          //     v
+          // A A 1 A A A
+          // A A 2
+          //
+          // Incrementing the current byte will make start bigger than limit, we
+          // will skip this byte, and find the first non 0xFF byte in start and
+          // increment it.
+          diff_index++;
+
+          while (diff_index < start->size()) {
+            // Keep moving until we find the first non 0xFF byte to
+            // increment it
+            if (static_cast<uint8_t>((*start)[diff_index]) <
+                static_cast<uint8_t>(0xff)) {
+              (*start)[diff_index]++;
+              start->resize(diff_index + 1);
+              break;
+            }
+            diff_index++;
+          }
+        }
+        assert(Compare(*start, limit) < 0);
+      }
     }
 
     void FindShortSuccessor(std::string* key) const override {
@@ -49,7 +96,7 @@ class SeparatedBlockTest
     }
 
     bool CanKeysWithDifferentByteContentsBeEqual() const override {
-      assert(false);
+      return false;
     }
 
     using Comparator::CompareWithoutTimestamp;
@@ -62,6 +109,11 @@ class SeparatedBlockTest
       assert(false);
     }
   };
+
+  const Comparator* MvccComparator() {
+    static MvccComparatorImpl c;
+    return &c;
+  }
 
  protected:
   static std::string ToInternalKey(const std::string& key, SequenceNumber s) {
@@ -89,23 +141,28 @@ class SeparatedBlockTest
 
   void TearDown() override { EXPECT_OK(DestroyDir(env_, test_dir_)); }
 
-  std::string internal_key(uint32_t key, SequenceNumber seq) {
+  std::string mvcc_key(uint32_t key, uint64_t mvcc_version, SequenceNumber seq) {
     char k[9] = {0};
     sprintf(k, "%08u", key);
-    return SeparatedBlockTest::ToInternalKey(k, seq);
+    std::string k_string(k);
+    PutFixed64(&k_string, mvcc_version);
+    return SeparatedBlockTest::ToInternalKey(k_string, seq);
   }
 
-  void CreateTableWithDefaultData(const std::string& table_name, uint32_t num, uint32_t seq_nums) {
+  void CreateTableWithDefaultData(const std::string& table_name, uint32_t num, uint32_t mvcc_nums) {
     std::vector<std::pair<std::string, std::string>> kv;
+    uint64_t seq_num = 1;
     {
       Random rnd(101);
-        for (uint32_t key = 0; key < num; key++) {
-          std::string v;
-          for (uint32_t ts = seq_nums; ts > 0; ts--) {
-            std::string ikey = internal_key(key, SequenceNumber{ts});
-            v = rnd.HumanReadableString(ts+5);
-            kv.emplace_back(ikey, v);
-          }
+      for (uint32_t key = 0; key < num; key++) {
+        std::string v;
+        seq_num += mvcc_nums * (key + 1);
+        for (uint32_t ts = mvcc_nums; ts > 0; ts--) {
+          std::string ikey = mvcc_key(key, ts, SequenceNumber{seq_num--});
+          v = rnd.HumanReadableString(ts+5);
+          kv.emplace_back(ikey, v);
+          std::cout << Slice{ikey}.ToString(true) << std::endl;
+        }
       }
     }
     CreateTable(table_name, CompressionType::kNoCompression, kv);
@@ -119,6 +176,7 @@ class SeparatedBlockTest
 
     // Create table builder.
     Options options;
+    options.comparator = MvccComparator();
     ImmutableOptions ioptions(options);
     InternalKeyComparator comparator(options.comparator);
     ColumnFamilyOptions cf_options;
@@ -307,7 +365,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
     std::unique_ptr<InternalIterator> table_iter(
         table->NewIterator(read_options, moptions.prefix_extractor.get(),
                            nullptr, false, TableReaderCaller::kUncategorized));
-    table_iter->Seek(internal_key(53, 2));
+    table_iter->Seek(mvcc_key(53, 1, 100));
     while (table_iter->Valid()) {
       Slice key(table_iter->key());
       ParsedInternalKey ikey;
