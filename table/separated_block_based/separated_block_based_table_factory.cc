@@ -351,8 +351,7 @@ TableBuilder* SeparatedBlockBasedTableFactory::NewTableBuilder(
     const TableBuilderOptions& table_builder_options,
     WritableFileWriter* file) const {
   return new SeparatedBlockBasedTableBuilder(
-      table_options_, table_builder_options,
-      *test::BytewiseComparatorWithU64TsWrapper(), file);
+      table_options_, table_builder_options, table_builder_options.ioptions.user_comparator, file);
 }
 
 Status SeparatedBlockBasedTableFactory::NewTableReader(

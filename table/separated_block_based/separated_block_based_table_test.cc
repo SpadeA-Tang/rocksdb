@@ -141,11 +141,15 @@ class SeparatedBlockTest
 
   void TearDown() override { EXPECT_OK(DestroyDir(env_, test_dir_)); }
 
+  void encode_u64_desc(std::string& key, uint64_t mvcc_version) {
+      PutFixed64(&key, !mvcc_version);
+  }
+
   std::string mvcc_key(uint32_t key, uint64_t mvcc_version, SequenceNumber seq) {
     char k[9] = {0};
     sprintf(k, "%08u", key);
     std::string k_string(k);
-    PutFixed64(&k_string, mvcc_version);
+    encode_u64_desc(k_string, mvcc_version);
     return SeparatedBlockTest::ToInternalKey(k_string, seq);
   }
 
@@ -250,6 +254,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   CreateTableWithDefaultData("test", 100, 3);
   std::unique_ptr<SeparatedBlockBasedTable> table;
   Options options;
+  options.comparator = MvccComparator();
   ImmutableOptions ioptions(options);
   FileOptions foptions;
   foptions.use_direct_reads = use_direct_reads_;

@@ -92,7 +92,7 @@ FilterBlockBuilder* CreateFilterBlockBuilder(
 
 struct SeparatedBlockBasedTableBuilder::Rep {
   Rep(const BlockBasedTableOptions& table_opt, const TableBuilderOptions& tbo,
-      const Comparator& user_comparator_, WritableFileWriter* f)
+      const Comparator* user_comparator_, WritableFileWriter* f)
       : ioptions(tbo.ioptions),
         moptions(tbo.moptions),
         table_options(table_opt),
@@ -260,7 +260,7 @@ struct SeparatedBlockBasedTableBuilder::Rep {
   const ImmutableOptions ioptions;
   const MutableCFOptions moptions;
   const BlockBasedTableOptions table_options;
-  const Comparator& user_comparator;
+  const Comparator* user_comparator;
   const InternalKeyComparator& internal_comparator;
   WritableFileWriter* file;
   std::atomic<uint64_t> offset;
@@ -332,7 +332,7 @@ struct SeparatedBlockBasedTableBuilder::Rep {
 
 SeparatedBlockBasedTableBuilder::SeparatedBlockBasedTableBuilder(
     const BlockBasedTableOptions& table_options, const TableBuilderOptions& tbo,
-    const Comparator& user_comparator, WritableFileWriter* file) {
+    const Comparator* user_comparator, WritableFileWriter* file) {
   BlockBasedTableOptions sanitized_table_options(table_options);
   if (sanitized_table_options.format_version == 0 &&
       sanitized_table_options.checksum != kCRC32c) {
@@ -689,7 +689,7 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
 
     // New user key
     if (r->last_key.empty() ||
-        r->user_comparator.CompareWithoutTimestamp(key, r->last_key) != 0) {
+        r->user_comparator->CompareWithoutTimestamp(key, r->last_key) != 0) {
       auto should_flush = r->flush_block_policy->Update(key, value);
       if (should_flush) {
         assert(!r->data_block.empty());

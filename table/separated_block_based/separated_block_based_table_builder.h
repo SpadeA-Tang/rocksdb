@@ -17,7 +17,7 @@ class SeparatedBlockBasedTableBuilder : public TableBuilder {
   SeparatedBlockBasedTableBuilder(
       const BlockBasedTableOptions& table_options,
       const TableBuilderOptions& table_builder_options,
-      const Comparator& user_comparator, WritableFileWriter* file);
+      const Comparator* user_comparator, WritableFileWriter* file);
 
   // No copying allowed
   SeparatedBlockBasedTableBuilder(const SeparatedBlockBasedTableBuilder&) =
