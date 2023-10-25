@@ -189,6 +189,13 @@ inline Slice ExtractUserKey(const Slice& internal_key) {
   return Slice(internal_key.data(), internal_key.size() - kNumInternalBytes);
 }
 
+// Returns the user key portion of an internal key.
+inline Slice ExtractMvccUserKey(const Slice& internal_key) {
+  assert(internal_key.size() >= kNumInternalBytes);
+  return Slice(internal_key.data(),
+               internal_key.size() - 2 * kNumInternalBytes);
+}
+
 inline Slice ExtractUserKeyAndStripTimestamp(const Slice& internal_key,
                                              size_t ts_sz) {
   assert(internal_key.size() >= kNumInternalBytes + ts_sz);

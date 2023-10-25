@@ -100,9 +100,11 @@ class SeparatedBlockTest
     }
 
     using Comparator::CompareWithoutTimestamp;
-    int CompareWithoutTimestamp(const Slice& a, bool /*a_has_ts*/, const Slice& b,
-                                bool /*b_has_ts*/) const override {
-      assert(false);
+    int CompareWithoutTimestamp(const Slice& a, bool a_has_ts, const Slice& b,
+                                bool b_has_ts) const override {
+      assert(a_has_ts);
+      assert(b_has_ts);
+      return ExtractMvccUserKey(a).compare(ExtractMvccUserKey(b));
     }
 
     bool EqualWithoutTimestamp(const Slice& a, const Slice& b) const override {
@@ -142,7 +144,15 @@ class SeparatedBlockTest
   void TearDown() override { EXPECT_OK(DestroyDir(env_, test_dir_)); }
 
   void encode_u64_desc(std::string& key, uint64_t mvcc_version) {
-      PutFixed64(&key, !mvcc_version);
+      PutFixed64(&key, ~mvcc_version);
+  }
+
+  uint64_t extract_mvcc_version(const Slice& key, bool raw_key) {
+    if (raw_key) {
+      return ~DecodeFixed64(key.data() + (key.size() - 2 * kNumInternalBytes));
+    } else {
+      return ~DecodeFixed64(key.data() + (key.size() - kNumInternalBytes));
+    }
   }
 
   std::string mvcc_key(uint32_t key, uint64_t mvcc_version, SequenceNumber seq) {
@@ -151,6 +161,34 @@ class SeparatedBlockTest
     std::string k_string(k);
     encode_u64_desc(k_string, mvcc_version);
     return SeparatedBlockTest::ToInternalKey(k_string, seq);
+  }
+
+  struct ParsedMvccKey {
+    Slice user_key;
+    uint64_t mvcc_version;
+    SequenceNumber sequence;
+    ValueType type;
+
+    ParsedMvccKey()
+        : user_key(""), sequence(0), type(ValueType::kMaxValue) {}
+  };
+
+  inline Status parse_internal_key_to_mvcc(const Slice& internal_key,
+                                  ParsedMvccKey* result) {
+    const size_t n = internal_key.size();
+
+    assert(n > 2 * kNumInternalBytes);
+
+    uint64_t num = DecodeFixed64(internal_key.data() + n - kNumInternalBytes);
+    unsigned char c = num & 0xff;
+    result->sequence = num >> 8;
+    result->type = static_cast<ValueType>(c);
+    assert(result->type <= ValueType::kMaxValue);
+    result->mvcc_version =
+        ~DecodeFixed64(internal_key.data() + (n - 2 * kNumInternalBytes));
+    result->user_key = Slice(internal_key.data(), n - 2 * kNumInternalBytes);
+
+    return Status::OK();
   }
 
   void CreateTableWithDefaultData(const std::string& table_name, uint32_t num, uint32_t mvcc_nums) {
@@ -261,6 +299,31 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   InternalKeyComparator comparator(options.comparator);
   NewSeparatedBlockBasedTableReader(foptions, ioptions, comparator, "test",
                                     &table);
+
+  {
+    ReadOptions read_options;
+    read_options.all_versions = true;
+    SnapshotImpl s;
+    s.number_ = 3;
+    read_options.snapshot = &s;
+    const MutableCFOptions moptions(options);
+    std::unique_ptr<InternalIterator> table_iter(
+        table->NewIterator(read_options, moptions.prefix_extractor.get(),
+                           nullptr, false, TableReaderCaller::kUncategorized));
+    table_iter->SeekToFirst();
+    while (table_iter->Valid()) {
+      Slice key(table_iter->key());
+      ParsedInternalKey ikey;
+      ParseInternalKey(key, &ikey, false);
+      Slice value(table_iter->value());
+      std::cout << key.ToString(true) << std::endl;
+      std::cout << "key " << ExtractMvccUserKey(key).ToString()
+                << ", mvcc version "
+                << extract_mvcc_version(ikey.user_key, false) << ", sequence "
+                << ikey.sequence << ", value " << value.ToString() << std::endl;
+      table_iter->Next();
+    }
+  }
 
   // Full Scan
   {

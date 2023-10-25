@@ -39,8 +39,7 @@ bool SeparatedBlockBasedTableIterator::seek_to_version(SequenceNumber s) {
 
 SequenceNumber SeparatedBlockBasedTableIterator::current_key_version() const {
   auto k = key();
-  uint64_t num = DecodeFixed64(k.data() + k.size() - kNumInternalBytes);
-  return num >> 8;
+  return ~DecodeFixed64(k.data() + k.size() - 2 * kNumInternalBytes);
 }
 
 bool SeparatedBlockBasedTableIterator::next_version(SequenceNumber s) {
