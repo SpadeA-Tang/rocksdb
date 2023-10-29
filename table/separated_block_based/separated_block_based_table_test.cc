@@ -118,11 +118,6 @@ class SeparatedBlockTest
   }
 
  protected:
-  static std::string ToInternalKey(const std::string& key, SequenceNumber s) {
-    InternalKey internal_key(key, s, ValueType::kTypeValue);
-    return internal_key.Encode().ToString();
-  }
-
   CompressionType compression_type_;
   bool use_direct_reads_;
 
@@ -143,10 +138,6 @@ class SeparatedBlockTest
 
   void TearDown() override { EXPECT_OK(DestroyDir(env_, test_dir_)); }
 
-  void encode_u64_desc(std::string& key, uint64_t mvcc_version) {
-      PutFixed64(&key, ~mvcc_version);
-  }
-
   uint64_t extract_mvcc_version(const Slice& key, bool raw_key) {
     if (raw_key) {
       return ~DecodeFixed64(key.data() + (key.size() - 2 * kNumInternalBytes));
@@ -160,7 +151,7 @@ class SeparatedBlockTest
     sprintf(k, "%08u", key);
     std::string k_string(k);
     encode_u64_desc(k_string, mvcc_version);
-    return SeparatedBlockTest::ToInternalKey(k_string, seq);
+    return ToInternalKey(k_string, seq);
   }
 
   struct ParsedMvccKey {
@@ -316,7 +307,6 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
       ParsedInternalKey ikey;
       ParseInternalKey(key, &ikey, false);
       Slice value(table_iter->value());
-      std::cout << key.ToString(true) << std::endl;
       std::cout << "key " << ExtractMvccUserKey(key).ToString()
                 << ", mvcc version "
                 << extract_mvcc_version(ikey.user_key, false) << ", sequence "
@@ -329,9 +319,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   {
     ReadOptions read_options;
     read_options.all_versions = true;
-    SnapshotImpl s;
-    s.number_ = 3;
-    read_options.snapshot = &s;
+    read_options.read_ts = 3;
     const MutableCFOptions moptions(options);
     std::unique_ptr<InternalIterator> table_iter(
         table->NewIterator(read_options, moptions.prefix_extractor.get(),
@@ -343,22 +331,22 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
       sprintf(k, "%08u", verify);
 
       Slice key(table_iter->key());
-      ParsedInternalKey ikey;
-      ParseInternalKey(key, &ikey, false);
-      assert(ikey.user_key.compare(Slice{k}) == 0);
-      assert(ikey.sequence == SequenceNumber{3});
+      ParsedMvccKey mvcc_key;
+      parse_internal_key_to_mvcc(key, &mvcc_key);
+      assert(mvcc_key.user_key.compare(Slice{k}) == 0 );
+      assert(mvcc_key.mvcc_version == 3);
       table_iter->Next();
 
       key = table_iter->key();
-      ParseInternalKey(key, &ikey, false);
-      assert(ikey.user_key.compare(Slice{k}) == 0);
-      assert(ikey.sequence == SequenceNumber{2});
+      parse_internal_key_to_mvcc(key, &mvcc_key);
+      assert(mvcc_key.user_key.compare(Slice{k}) == 0 );
+      assert(mvcc_key.mvcc_version == 2);
       table_iter->Next();
 
       key = table_iter->key();
-      ParseInternalKey(key, &ikey, false);
-      assert(ikey.user_key.compare(Slice{k}) == 0);
-      assert(ikey.sequence == SequenceNumber{1});
+      parse_internal_key_to_mvcc(key, &mvcc_key);
+      assert(mvcc_key.user_key.compare(Slice{k}) == 0 );
+      assert(mvcc_key.mvcc_version == 1);
       table_iter->Next();
       verify++;
     }
@@ -369,9 +357,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   {
     ReadOptions read_options;
     read_options.all_versions = false;
-    SnapshotImpl s;
-    s.number_ = 3;
-    read_options.snapshot = &s;
+    read_options.read_ts = 3;
     const MutableCFOptions moptions(options);
     std::unique_ptr<InternalIterator> table_iter(
         table->NewIterator(read_options, moptions.prefix_extractor.get(),
@@ -383,10 +369,10 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
       sprintf(k, "%08u", verify);
 
       Slice key(table_iter->key());
-      ParsedInternalKey ikey;
-      ParseInternalKey(key, &ikey, false);
-      assert(ikey.user_key.compare(Slice{k}) == 0);
-      assert(ikey.sequence == SequenceNumber{3});
+      ParsedMvccKey mvcc_key;
+      parse_internal_key_to_mvcc(key, &mvcc_key);
+      assert(mvcc_key.user_key.compare(Slice{k}) == 0);
+      assert(mvcc_key.mvcc_version == 3);
       table_iter->Next();
 
       verify++;
@@ -398,9 +384,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   {
     ReadOptions read_options;
     read_options.all_versions = false;
-    SnapshotImpl s;
-    s.number_ = 2;
-    read_options.snapshot = &s;
+    read_options.read_ts = 2;
     const MutableCFOptions moptions(options);
     std::unique_ptr<InternalIterator> table_iter(
         table->NewIterator(read_options, moptions.prefix_extractor.get(),
@@ -412,10 +396,10 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
       sprintf(k, "%08u", verify);
 
       Slice key(table_iter->key());
-      ParsedInternalKey ikey;
-      ParseInternalKey(key, &ikey, false);
-      assert(ikey.user_key.compare(Slice{k}) == 0);
-      assert(ikey.sequence == SequenceNumber{2});
+      ParsedMvccKey mvcc_key;
+      parse_internal_key_to_mvcc(key, &mvcc_key);
+      assert(mvcc_key.user_key.compare(Slice{k}) == 0);
+      assert(mvcc_key.mvcc_version == 2);
       table_iter->Next();
 
       verify++;
@@ -423,27 +407,27 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
     assert(verify == 100);
   }
 
-  {
-    ReadOptions read_options;
-    read_options.all_versions = false;
-    SnapshotImpl s;
-    s.number_ = 3;
-    read_options.snapshot = &s;
-    const MutableCFOptions moptions(options);
-    std::unique_ptr<InternalIterator> table_iter(
-        table->NewIterator(read_options, moptions.prefix_extractor.get(),
-                           nullptr, false, TableReaderCaller::kUncategorized));
-    table_iter->Seek(mvcc_key(53, 1, 100));
-    while (table_iter->Valid()) {
-      Slice key(table_iter->key());
-      ParsedInternalKey ikey;
-      ParseInternalKey(key, &ikey, false);
-      Slice value(table_iter->value());
-      std::cout << "key " << ikey.user_key.ToString() << ", sequence " << ikey.sequence
-                << ", value " << value.ToString() << std::endl;
-      table_iter->Next();
-    }
-  }
+//  {
+//    ReadOptions read_options;
+//    read_options.all_versions = false;
+//    SnapshotImpl s;
+//    s.number_ = 3;
+//    read_options.snapshot = &s;
+//    const MutableCFOptions moptions(options);
+//    std::unique_ptr<InternalIterator> table_iter(
+//        table->NewIterator(read_options, moptions.prefix_extractor.get(),
+//                           nullptr, false, TableReaderCaller::kUncategorized));
+//    table_iter->Seek(mvcc_key(53, 1, 100));
+//    while (table_iter->Valid()) {
+//      Slice key(table_iter->key());
+//      ParsedInternalKey ikey;
+//      ParseInternalKey(key, &ikey, false);
+//      Slice value(table_iter->value());
+//      std::cout << "key " << ikey.user_key.ToString() << ", sequence " << ikey.sequence
+//                << ", value " << value.ToString() << std::endl;
+//      table_iter->Next();
+//    }
+//  }
 }
 
 }  // namespace ROCKSDB_NAMESPACE

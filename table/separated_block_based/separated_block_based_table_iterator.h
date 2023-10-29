@@ -310,12 +310,12 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
 
   void ParseItem();
 
-  SequenceNumber current_key_version() const;
+  uint64_t current_key_version() const;
 
-  bool seek_to_version(SequenceNumber s);
-  bool next_version(SequenceNumber s);
+  bool seek_to_version(uint64_t ts);
+  bool next_version(uint64_t ts);
   bool same_old_key();
-  void seek_old_block(SequenceNumber s);
+  void seek_old_block(uint64_t ts);
   void NextImpl();
 };
 

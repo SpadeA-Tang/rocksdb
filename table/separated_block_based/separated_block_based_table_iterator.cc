@@ -12,10 +12,10 @@ void SeparatedBlockBasedTableIterator::SeekToFirst() {
 }
 
 void SeparatedBlockBasedTableIterator::ParseItem() {
-  SequenceNumber s(read_options_.snapshot->GetSequenceNumber());
+  uint64_t ts = read_options_.read_ts;
   while (Valid()) {
-    SequenceNumber cur_s = current_key_version();
-    if (cur_s > s && !seek_to_version(s)) {
+    uint64_t cur_s = current_key_version();
+    if (cur_s > ts && !seek_to_version(ts)) {
       Next();
       continue;
     }
@@ -23,13 +23,13 @@ void SeparatedBlockBasedTableIterator::ParseItem() {
   }
 }
 
-bool SeparatedBlockBasedTableIterator::seek_to_version(SequenceNumber s) {
-  if (s >= current_key_version()) {
+bool SeparatedBlockBasedTableIterator::seek_to_version(uint64_t ts) {
+  if (ts >= current_key_version()) {
     return true;
   }
 
-  while (next_version(s)) {
-    if (s >= current_key_version()) {
+  while (next_version(ts)) {
+    if (ts >= current_key_version()) {
       return true;
     }
   }
@@ -37,12 +37,12 @@ bool SeparatedBlockBasedTableIterator::seek_to_version(SequenceNumber s) {
   return false;
 }
 
-SequenceNumber SeparatedBlockBasedTableIterator::current_key_version() const {
+uint64_t SeparatedBlockBasedTableIterator::current_key_version() const {
   auto k = key();
   return ~DecodeFixed64(k.data() + k.size() - 2 * kNumInternalBytes);
 }
 
-bool SeparatedBlockBasedTableIterator::next_version(SequenceNumber s) {
+bool SeparatedBlockBasedTableIterator::next_version(uint64_t ts) {
   if (iter_state_ == IterState::OldVersioDone) {
     return false;
   }
@@ -62,7 +62,7 @@ bool SeparatedBlockBasedTableIterator::next_version(SequenceNumber s) {
     iter_state_ = IterState::OldVersion;
     return true;
   }
-  seek_old_block(s);
+  seek_old_block(ts);
   if (!old_block_iter_.Valid()) {
     iter_state_ = IterState::OldVersioDone;
     return false;
@@ -70,10 +70,33 @@ bool SeparatedBlockBasedTableIterator::next_version(SequenceNumber s) {
   return true;
 }
 
-void SeparatedBlockBasedTableIterator::seek_old_block(SequenceNumber s) {
+void encode_u64_desc(std::string& key, uint64_t mvcc_version) {
+  PutFixed64(&key, ~mvcc_version);
+}
+
+std::string ToInternalKey(const std::string& key, SequenceNumber s) {
+  InternalKey internal_key(key, s, ValueType::kTypeValue);
+  return internal_key.Encode().ToString();
+}
+
+std::string mvcc_key(uint32_t key, uint64_t mvcc_version, SequenceNumber seq) {
+  char k[9] = {0};
+  sprintf(k, "%08u", key);
+  std::string k_string(k);
+  encode_u64_desc(k_string, mvcc_version);
+  return ToInternalKey(k_string, seq);
+}
+
+InternalKey raw_to_mvcc_key_with_mvcc_version(Slice raw_key, uint64_t mvcc_version) {
+  raw_key.remove_suffix(2*kNumInternalBytes);
+  std::string user_key_without_mvcc = raw_key.ToString();
+  encode_u64_desc(user_key_without_mvcc, mvcc_version);
+  return {user_key_without_mvcc, kMaxSequenceNumber, ValueType::kTypeValue};
+}
+
+void SeparatedBlockBasedTableIterator::seek_old_block(uint64_t mvcc_version) {
   Slice current_key(key_impl());
-  current_key.remove_suffix(kNumInternalBytes);
-  InternalKey key(current_key, s, ValueType::kTypeValue);
+  InternalKey key = raw_to_mvcc_key_with_mvcc_version(current_key, mvcc_version);
   Slice target = key.Encode();
 
   // todo: points to real block
@@ -113,9 +136,9 @@ bool SeparatedBlockBasedTableIterator::same_old_key() {
   if (old_key.size() != key.size()) {
     return false;
   }
-  // todo: temporarily use sequence number for comparison
-  old_key.remove_suffix(kNumInternalBytes);
-  key.remove_suffix(kNumInternalBytes);
+  // todo: use a more elegant way to compare
+  old_key.remove_suffix(2*kNumInternalBytes);
+  key.remove_suffix(2*kNumInternalBytes);
   return old_key.compare(key) == 0;
 }
 

@@ -26,6 +26,10 @@ namespace ROCKSDB_NAMESPACE {
 class TableReader;
 class Footer;
 
+// todo: to remove these tmp functions
+void encode_u64_desc(std::string& key, uint64_t mvcc_version);
+std::string ToInternalKey(const std::string& key, SequenceNumber s);
+
 class SeparatedBlockBasedTable : public TableReader {
  public:
   // 1-byte compression type + 32-bit checksum

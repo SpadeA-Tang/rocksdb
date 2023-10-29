@@ -1641,7 +1641,7 @@ struct ReadOptions {
   //
   // Default: false
   bool adaptive_readahead;
-
+  uint64_t read_ts;
   bool all_versions;
 
   ReadOptions();
