@@ -448,6 +448,23 @@ class BlockIter : public InternalIteratorBase<TValue> {
                           kDisableGlobalSequenceNumber);
   }
 
+  // mvcc version
+  int CompareCurrentKeyV2(const Slice& other) {
+    if (raw_key_.IsUserKey()) {
+      assert(global_seqno_ == kDisableGlobalSequenceNumber);
+      //      return ucmp().Compare(raw_key_.GetUserKey(), other);
+      return ucmp().CompareWithoutTimestamp(raw_key_.GetUserKey(), true, other,
+                                            true);
+    } else if (global_seqno_ == kDisableGlobalSequenceNumber) {
+      Slice target{other.data(), other.size() - 8};
+      return ucmp().CompareWithoutTimestamp(raw_key_.GetUserKey(), true, target,
+                                            true);
+    }
+    assert(false);
+    return icmp().Compare(raw_key_.GetInternalKey(), global_seqno_, other,
+                          kDisableGlobalSequenceNumber);
+  }
+
  private:
   const Comparator* raw_ucmp_;
   // Store the cache handle, if the block is cached. We need this since the
@@ -485,7 +502,7 @@ class BlockIter : public InternalIteratorBase<TValue> {
   template <typename DecodeKeyFunc>
   inline bool BinarySeek(const Slice& target, uint32_t* index,
                          bool* is_index_key_result,
-                         bool not_consider_sequence_num = false);
+                         bool mvcc_version = false);
 
   void FindKeyAfterBinarySeek(const Slice& target, uint32_t index,
                               bool is_index_key_result,

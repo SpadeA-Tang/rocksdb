@@ -104,7 +104,7 @@ class SeparatedBlockTest
                                 bool b_has_ts) const override {
       assert(a_has_ts);
       assert(b_has_ts);
-      return ExtractMvccUserKey(a).compare(ExtractMvccUserKey(b));
+      return Slice{a.data(), a.size() - 8}.compare({b.data(), b.size() - 8});
     }
 
     bool EqualWithoutTimestamp(const Slice& a, const Slice& b) const override {
@@ -280,7 +280,7 @@ class SeparatedBlockTest
 };
 
 TEST_F(SeparatedBlockTest, TestBuilder) {
-  CreateTableWithDefaultData("test", 100, 3);
+  CreateTableWithDefaultData("test", 20, 3);
   std::unique_ptr<SeparatedBlockBasedTable> table;
   Options options;
   options.comparator = MvccComparator();
@@ -290,30 +290,6 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
   InternalKeyComparator comparator(options.comparator);
   NewSeparatedBlockBasedTableReader(foptions, ioptions, comparator, "test",
                                     &table);
-
-  {
-    ReadOptions read_options;
-    read_options.all_versions = true;
-    SnapshotImpl s;
-    s.number_ = 3;
-    read_options.snapshot = &s;
-    const MutableCFOptions moptions(options);
-    std::unique_ptr<InternalIterator> table_iter(
-        table->NewIterator(read_options, moptions.prefix_extractor.get(),
-                           nullptr, false, TableReaderCaller::kUncategorized));
-    table_iter->SeekToFirst();
-    while (table_iter->Valid()) {
-      Slice key(table_iter->key());
-      ParsedInternalKey ikey;
-      ParseInternalKey(key, &ikey, false);
-      Slice value(table_iter->value());
-      std::cout << "key " << ExtractMvccUserKey(key).ToString()
-                << ", mvcc version "
-                << extract_mvcc_version(ikey.user_key, false) << ", sequence "
-                << ikey.sequence << ", value " << value.ToString() << std::endl;
-      table_iter->Next();
-    }
-  }
 
   // Full Scan
   {
@@ -407,27 +383,27 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
     assert(verify == 100);
   }
 
-//  {
-//    ReadOptions read_options;
-//    read_options.all_versions = false;
-//    SnapshotImpl s;
-//    s.number_ = 3;
-//    read_options.snapshot = &s;
-//    const MutableCFOptions moptions(options);
-//    std::unique_ptr<InternalIterator> table_iter(
-//        table->NewIterator(read_options, moptions.prefix_extractor.get(),
-//                           nullptr, false, TableReaderCaller::kUncategorized));
-//    table_iter->Seek(mvcc_key(53, 1, 100));
-//    while (table_iter->Valid()) {
-//      Slice key(table_iter->key());
-//      ParsedInternalKey ikey;
-//      ParseInternalKey(key, &ikey, false);
-//      Slice value(table_iter->value());
-//      std::cout << "key " << ikey.user_key.ToString() << ", sequence " << ikey.sequence
-//                << ", value " << value.ToString() << std::endl;
-//      table_iter->Next();
-//    }
-//  }
+  {
+    ReadOptions read_options;
+    read_options.read_ts = 2;
+    read_options.all_versions = true;
+    const MutableCFOptions moptions(options);
+    std::unique_ptr<InternalIterator> table_iter(
+        table->NewIterator(read_options, moptions.prefix_extractor.get(),
+                           nullptr, false, TableReaderCaller::kUncategorized));
+    std::string target = mvcc_key(14, 2, kMaxSequenceNumber);
+    table_iter->Seek(target);
+    while (table_iter->Valid()) {
+      Slice key(table_iter->key());
+      ParsedMvccKey mvcc_key;
+      parse_internal_key_to_mvcc(key, &mvcc_key);
+      Slice value(table_iter->value());
+      std::cout << "key " << mvcc_key.user_key.ToString() << ", mvcc version "
+                << mvcc_key.mvcc_version << ", sequence " << mvcc_key.sequence
+                << ", value " << value.ToString() << std::endl;
+      table_iter->Next();
+    }
+  }
 }
 
 }  // namespace ROCKSDB_NAMESPACE

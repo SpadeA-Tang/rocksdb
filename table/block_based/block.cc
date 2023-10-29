@@ -468,7 +468,7 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
     // search simply lands at the right place.
     skip_linear_scan = true;
   } else if (value_delta_encoded_) {
-    ok = BinarySeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan);
+    ok = BinarySeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan, true);
   } else {
     ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan);
   }
@@ -781,7 +781,7 @@ template <class TValue>
 template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
                                    bool* skip_linear_scan,
-                                   bool not_consider_sequence_num) {
+                                   bool mvcc_version) {
   if (restarts_ == 0) {
     // SST files dedicated to range tombstones are written with index blocks
     // that have no keys while also having `num_restarts_ == 1`. This would
@@ -814,9 +814,8 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
     Slice mid_key(key_ptr, non_shared);
     raw_key_.SetKey(mid_key, false /* copy */);
     int cmp;
-    if (not_consider_sequence_num) {
-      cmp = icmp().user_comparator()->Compare(raw_key_.GetUserKey(),
-                                              ExtractUserKey(target));
+    if (mvcc_version) {
+      cmp = CompareCurrentKeyV2(target);
     } else {
       cmp = CompareCurrentKey(target);
     }

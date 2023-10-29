@@ -109,8 +109,13 @@ class Comparator : public Customizable {
 
   inline size_t timestamp_size() const { return timestamp_size_; }
 
-  int CompareWithoutTimestamp(const Slice& a, const Slice& b) const {
-    return CompareWithoutTimestamp(a, /*a_has_ts=*/true, b, /*b_has_ts=*/true);
+  int CompareWithoutTimestamp(const Slice& a, const Slice& b, bool internal_key = false) const {
+    if (internal_key) {
+      return CompareWithoutTimestamp({a.data(), a.size() - 8}, true, {b.data(), b.size() - 8}, true);
+    } else {
+      return CompareWithoutTimestamp(a, /*a_has_ts=*/true, b,
+                                     /*b_has_ts=*/true);
+    }
   }
 
   // For two events e1 and e2 whose timestamps are t1 and t2 respectively,

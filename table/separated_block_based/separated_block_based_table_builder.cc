@@ -689,7 +689,7 @@ void SeparatedBlockBasedTableBuilder::Add(const Slice& key,
 
     // New user key
     if (r->last_key.empty() ||
-        r->user_comparator->CompareWithoutTimestamp(key, r->last_key) != 0) {
+        r->user_comparator->CompareWithoutTimestamp(key, r->last_key, true) != 0) {
       auto should_flush = r->flush_block_policy->Update(key, value);
       if (should_flush) {
         assert(!r->data_block.empty());

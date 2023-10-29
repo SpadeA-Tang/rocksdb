@@ -150,6 +150,7 @@ class ShortenedIndexBuilder : public IndexBuilder {
   virtual void AddIndexEntry(std::string* last_key_in_current_block,
                              const Slice* first_key_in_next_block,
                              const BlockHandle& block_handle) override {
+    std::cout << "index key " << last_key_in_current_block << std::endl;
     if (first_key_in_next_block != nullptr) {
       if (shortening_mode_ !=
           BlockBasedTableOptions::IndexShorteningMode::kNoShortening) {
