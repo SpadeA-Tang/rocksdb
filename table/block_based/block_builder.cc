@@ -34,7 +34,10 @@
 #include "table/block_based/block_builder.h"
 
 #include <assert.h>
+
 #include <algorithm>
+#include <iostream>
+
 #include "db/dbformat.h"
 #include "rocksdb/comparator.h"
 #include "table/block_based/data_block_footer.h"
@@ -144,6 +147,7 @@ void BlockBuilder::Add(const Slice& key, const Slice& value,
   // Ensure no unsafe mixing of Add and AddWithLastKey
   assert(!add_with_last_key_called_);
 
+  std::cout << "off, " << buffer_.size() << std::endl;
   AddWithLastKeyImpl(key, value, last_key_, delta_value, buffer_.size());
   if (use_delta_encoding_) {
     // Update state
@@ -200,8 +204,14 @@ inline void BlockBuilder::AddWithLastKeyImpl(const Slice& key,
 
   if (use_value_delta_encoding_) {
     // Add "<shared><non_shared>" to buffer_
+
+    uint64_t off = buffer_.size();
     PutVarint32Varint32(&buffer_, static_cast<uint32_t>(shared),
                         static_cast<uint32_t>(non_shared));
+    const char* p = buffer_.data() + off;
+    uint32_t s = reinterpret_cast<const unsigned char*>(p)[0];
+    uint32_t n = reinterpret_cast<const unsigned char*>(p)[1];
+    std::cout << "shared, " << s << ", non_shared " << n << std::endl;
   } else {
     // Add "<shared><non_shared><value_size>" to buffer_
     PutVarint32Varint32Varint32(&buffer_, static_cast<uint32_t>(shared),

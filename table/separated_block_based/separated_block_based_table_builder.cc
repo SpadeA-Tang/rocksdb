@@ -1212,7 +1212,7 @@ Status SeparatedBlockBasedTableBuilder::Finish() {
   FlushNewDataBlock();
   if (ok() && !empty_data_block) {
     r->index_builder->AddIndexEntry(
-        &r->last_key, nullptr /* no next data block */, r->pending_handle);
+        &r->last_new_key, nullptr /* no next data block */, r->pending_handle);
   }
 
   if (r->old_block_flushed) {

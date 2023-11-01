@@ -8,6 +8,8 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include "table/block_based/index_reader_common.h"
 
+#include <iostream>
+
 namespace ROCKSDB_NAMESPACE {
 Status BlockBasedTable::IndexReaderCommon::ReadIndexBlock(
     const BlockBasedTable* table, FilePrefetchBuffer* prefetch_buffer,

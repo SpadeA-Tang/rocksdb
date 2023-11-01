@@ -150,25 +150,30 @@ class ShortenedIndexBuilder : public IndexBuilder {
   virtual void AddIndexEntry(std::string* last_key_in_current_block,
                              const Slice* first_key_in_next_block,
                              const BlockHandle& block_handle) override {
-    std::cout << "index key " << last_key_in_current_block << std::endl;
-    if (first_key_in_next_block != nullptr) {
-      if (shortening_mode_ !=
-          BlockBasedTableOptions::IndexShorteningMode::kNoShortening) {
-        comparator_->FindShortestSeparator(last_key_in_current_block,
-                                           *first_key_in_next_block);
-      }
-      if (!seperator_is_key_plus_seq_ &&
-          comparator_->user_comparator()->Compare(
-              ExtractUserKey(*last_key_in_current_block),
-              ExtractUserKey(*first_key_in_next_block)) == 0) {
-        seperator_is_key_plus_seq_ = true;
-      }
-    } else {
-      if (shortening_mode_ == BlockBasedTableOptions::IndexShorteningMode::
-                                  kShortenSeparatorsAndSuccessor) {
-        comparator_->FindShortSuccessor(last_key_in_current_block);
-      }
-    }
+    size_t n = last_key_in_current_block->size();
+    uint64_t num = ~DecodeFixed64(last_key_in_current_block->data() + n -
+                                  2 * kNumInternalBytes);
+    Slice key{last_key_in_current_block->data(), n - 2 * kNumInternalBytes};
+    std::cout << "key " << key.ToString() << ", version " << num << std::endl;
+    //    if (first_key_in_next_block != nullptr) {
+    //      if (shortening_mode_ !=
+    //          BlockBasedTableOptions::IndexShorteningMode::kNoShortening) {
+    //        comparator_->FindShortestSeparator(last_key_in_current_block,
+    //                                           *first_key_in_next_block);
+    //      }
+    //      if (!seperator_is_key_plus_seq_ &&
+    //          comparator_->user_comparator()->Compare(
+    //              ExtractUserKey(*last_key_in_current_block),
+    //              ExtractUserKey(*first_key_in_next_block)) == 0) {
+    //        seperator_is_key_plus_seq_ = true;
+    //      }
+    //    } else {
+    //      if (shortening_mode_ ==
+    //      BlockBasedTableOptions::IndexShorteningMode::
+    //                                  kShortenSeparatorsAndSuccessor) {
+    //        comparator_->FindShortSuccessor(last_key_in_current_block);
+    //      }
+    //    }
     auto sep = Slice(*last_key_in_current_block);
 
     assert(!include_first_key_ || !current_block_first_internal_key_.empty());

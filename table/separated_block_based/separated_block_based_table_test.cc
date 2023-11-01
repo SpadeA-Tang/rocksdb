@@ -194,7 +194,6 @@ class SeparatedBlockTest
           std::string ikey = mvcc_key(key, ts, SequenceNumber{seq_num--});
           v = rnd.HumanReadableString(ts+5);
           kv.emplace_back(ikey, v);
-          std::cout << Slice{ikey}.ToString(true) << std::endl;
         }
       }
     }
@@ -280,7 +279,8 @@ class SeparatedBlockTest
 };
 
 TEST_F(SeparatedBlockTest, TestBuilder) {
-  CreateTableWithDefaultData("test", 20, 3);
+  uint32_t num_keys = 60;
+  CreateTableWithDefaultData("test", num_keys, 3);
   std::unique_ptr<SeparatedBlockBasedTable> table;
   Options options;
   options.comparator = MvccComparator();
@@ -326,7 +326,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
       table_iter->Next();
       verify++;
     }
-    assert(verify == 100);
+    assert(verify == num_keys);
   }
 
   // not scan all version, can read latest
@@ -353,7 +353,7 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
 
       verify++;
     }
-    assert(verify == 100);
+    assert(verify == num_keys);
   }
 
   // not scan all version, (the second latest)
@@ -380,18 +380,45 @@ TEST_F(SeparatedBlockTest, TestBuilder) {
 
       verify++;
     }
-    assert(verify == 100);
+    assert(verify == num_keys);
   }
 
   {
     ReadOptions read_options;
     read_options.read_ts = 2;
-    read_options.all_versions = true;
+    read_options.all_versions = false;
     const MutableCFOptions moptions(options);
     std::unique_ptr<InternalIterator> table_iter(
         table->NewIterator(read_options, moptions.prefix_extractor.get(),
                            nullptr, false, TableReaderCaller::kUncategorized));
     std::string target = mvcc_key(14, 2, kMaxSequenceNumber);
+    table_iter->Seek(target);
+    uint32_t verify = 14;
+    while (table_iter->Valid()) {
+      char k[9] = {0};
+      sprintf(k, "%08u", verify);
+
+      Slice key(table_iter->key());
+      ParsedMvccKey mvcc_key;
+      parse_internal_key_to_mvcc(key, &mvcc_key);
+      assert(mvcc_key.user_key.compare(Slice{k}) == 0);
+      assert(mvcc_key.mvcc_version == 2);
+      table_iter->Next();
+
+      verify++;
+    }
+    assert(verify == num_keys);
+  }
+
+  {
+    ReadOptions read_options;
+    read_options.read_ts = 2;
+    read_options.all_versions = false;
+    const MutableCFOptions moptions(options);
+    std::unique_ptr<InternalIterator> table_iter(
+        table->NewIterator(read_options, moptions.prefix_extractor.get(),
+                           nullptr, false, TableReaderCaller::kUncategorized));
+    std::string target = mvcc_key(14, 1, kMaxSequenceNumber);
     table_iter->Seek(target);
     while (table_iter->Valid()) {
       Slice key(table_iter->key());

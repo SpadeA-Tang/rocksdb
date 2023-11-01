@@ -3,7 +3,7 @@
 namespace ROCKSDB_NAMESPACE {
 void SeparatedBlockBasedTableIterator::Seek(const Slice& target) {
   SeekImpl(&target);
-  ParseItem();
+  ParseItem(&target);
 }
 
 void SeparatedBlockBasedTableIterator::SeekToFirst() {
@@ -11,10 +11,17 @@ void SeparatedBlockBasedTableIterator::SeekToFirst() {
   ParseItem();
 }
 
-void SeparatedBlockBasedTableIterator::ParseItem() {
+void SeparatedBlockBasedTableIterator::ParseItem(const Slice* target) {
   uint64_t ts = read_options_.read_ts;
   while (Valid()) {
     uint64_t cur_s = current_key_version();
+    if (target != nullptr && user_comparator_.CompareWithoutTimestamp(
+                                 ExtractUserKey(*target), user_key()) == 0) {
+      // Same key without mvcc version, so we should use the mvcc version of the
+      // target to restrict the seek_to_version instead of read_ts
+      ts = ~DecodeFixed64(target->data() + target->size() -
+                          2 * kNumInternalBytes);
+    }
     if (cur_s > ts && !seek_to_version(ts)) {
       Next();
       continue;
@@ -206,7 +213,7 @@ void SeparatedBlockBasedTableIterator::SeekImpl(const rocksdb::Slice* target) {
   if (target) {
     // The target may be less than current key in terms of sequence number, but
     // it's okey, as the ParseItem can point to the correct key
-    assert(!Valid() || icomp_.user_comparator()->Compare(
+    assert(!Valid() || icomp_.user_comparator()->CompareWithoutTimestamp(
                            ExtractUserKey(*target), user_key()) <= 0);
   }
 }

@@ -299,7 +299,8 @@ void DataBlockIter::SeekWithoutTsImpl(const Slice& target) {
   if (!ok) {
     return;
   }
-  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan, true);
+  // todo
+  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan, true, true);
 }
 
 void DataBlockIter::SeekWithoutTs(const Slice& target) {
@@ -476,7 +477,7 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
   if (!ok) {
     return;
   }
-  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan);
+  FindKeyAfterBinarySeek(seek_key, index, skip_linear_scan, true);
 }
 
 void DataBlockIter::SeekForPrevImpl(const Slice& target) {
@@ -723,7 +724,8 @@ template <class TValue>
 void BlockIter<TValue>::FindKeyAfterBinarySeek(const Slice& target,
                                                uint32_t index,
                                                bool skip_linear_scan,
-                                               bool not_consider_sequence_num) {
+                                               bool not_consider_sequence_num,
+                                               bool mvcc_version) {
   // SeekToRestartPoint() only does the lookup in the restart block. We need
   // to follow it up with NextImpl() to position the iterator at the restart
   // key.
@@ -748,21 +750,36 @@ void BlockIter<TValue>::FindKeyAfterBinarySeek(const Slice& target,
       if (!Valid()) {
         break;
       }
-      if (not_consider_sequence_num) {
-        if (current_ == max_offset) {
-          assert(icmp().user_comparator()->Compare(raw_key_.GetUserKey(),
-                                                   ExtractUserKey(target)) > 0);
-          break;
-        } else if (icmp().user_comparator()->Compare(
-                       raw_key_.GetUserKey(), ExtractUserKey(target)) >= 0) {
-          break;
+      if (!mvcc_version) {
+        if (not_consider_sequence_num) {
+          if (current_ == max_offset) {
+            assert(icmp().user_comparator()->Compare(
+                       raw_key_.GetUserKey(), ExtractUserKey(target)) > 0);
+            break;
+          } else if (icmp().user_comparator()->Compare(
+                         raw_key_.GetUserKey(), ExtractUserKey(target)) >= 0) {
+            break;
+          }
+        } else {
+          if (current_ == max_offset) {
+            assert(CompareCurrentKey(target) > 0);
+            break;
+          } else if (CompareCurrentKey(target) >= 0) {
+            break;
+          }
         }
       } else {
-        if (current_ == max_offset) {
-          assert(CompareCurrentKey(target) > 0);
-          break;
-        } else if (CompareCurrentKey(target) >= 0) {
-          break;
+        if (not_consider_sequence_num) {
+          if (current_ == max_offset) {
+            assert(icmp().user_comparator()->Compare(
+                       raw_key_.GetMvccUserKey(), ExtractMvccUserKey(target)) >
+                   0);
+            break;
+          } else if (icmp().user_comparator()->Compare(
+                         raw_key_.GetMvccUserKey(),
+                         ExtractMvccUserKey(target)) >= 0) {
+            break;
+          }
         }
       }
     }

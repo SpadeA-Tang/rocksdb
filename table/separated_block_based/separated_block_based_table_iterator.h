@@ -308,7 +308,7 @@ class SeparatedBlockBasedTableIterator : public InternalIteratorBase<Slice> {
   void CheckDataBlockWithinUpperBound();
   void CheckOldDataBlockWithinUpperBound();
 
-  void ParseItem();
+  void ParseItem(const Slice* target = nullptr);
 
   uint64_t current_key_version() const;
 
